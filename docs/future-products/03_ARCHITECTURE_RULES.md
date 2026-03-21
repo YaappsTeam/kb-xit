@@ -12,7 +12,7 @@ Audience: Developers, AI Agents
 - Every module MUST have a single responsibility
 - Modules MUST be independently deployable in future
 - All interactions MUST be event-driven
-- System behavior MUST be deterministic
+- System behaviour MUST be deterministic
 
 ---
 
@@ -43,7 +43,7 @@ execution-infrastructure
 - exit-engine MUST NOT depend on entry-engine
 - indicators-engine MUST NOT depend on strategy modules
 - execution-infrastructure MUST NOT depend on core logic
-- broker modules MUST NOT affect engine behavior
+- Broker modules MUST NOT affect engine behaviour
 - domain module MUST NOT depend on any other module
 
 ---
@@ -112,7 +112,7 @@ Valid states:
 SIGNALLED
 ORDER_PENDING
 ORDER_SENT
-FILLED
+FILLED/PARTIALLY_FILLED
 ACTIVE
 EXIT_PENDING
 EXIT_SENT
@@ -124,7 +124,7 @@ Rules:
 - State transitions MUST be validated
 - Invalid transitions MUST be rejected
 - States MUST NOT be skipped
-- Trade MUST always end in COMPLETED state
+- Trade MUST always end in a COMPLETED state
 
 ---
 
@@ -147,7 +147,7 @@ Rules:
 
 # 13. FORBIDDEN IMPLEMENTATION PATTERNS
 
-- switch-case based type handling
+- switch-case-based type handling
 - if-else chains for strategy selection
 - static mutable state
 - global variables
@@ -168,9 +168,9 @@ Rules:
 
 # 15. CONFIGURATION RULES
 
-- Configuration MUST be externalized
+- Configuration MUST be externalised
 - Configuration MUST NOT be hardcoded
-- Runtime behavior MUST be configurable without code changes
+- Runtime behaviour MUST be configurable without code changes
 
 ---
 
@@ -186,7 +186,7 @@ Rules:
 
 - All modules MUST be independently testable
 - Business logic MUST be isolated from infrastructure
-- Deterministic behavior MUST be testable
+- Deterministic behaviour MUST be testable
 
 ---
 
