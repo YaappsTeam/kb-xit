@@ -66,7 +66,7 @@ The module consists of:
 
 Base package:
 
-com.kb.trading.strategy
+com.kbquants.strategy
 
 Subpackages:
 

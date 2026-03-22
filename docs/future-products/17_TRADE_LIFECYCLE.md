@@ -64,7 +64,7 @@ The module consists of:
 
 Base package:
 
-com.kb.trading.lifecycle
+com.kbquants.lifecycle
 
 Subpackages:
 

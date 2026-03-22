@@ -62,7 +62,7 @@ The module consists of:
 
 Base package:
 
-com.kb.trading.entry
+com.kbquants.entry
 
 Subpackages:
 

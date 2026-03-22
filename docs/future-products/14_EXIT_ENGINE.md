@@ -67,7 +67,7 @@ The module consists of:
 
 Base package:
 
-com.kb.trading.exit
+com.kbquants.exit
 
 Subpackages:
 

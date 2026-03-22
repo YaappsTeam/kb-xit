@@ -53,7 +53,7 @@ The domain layer MUST NOT:
 
 Base package:
 
-com.kb.trading.domain
+com.kbquants.domain
 
 Subpackages:
 

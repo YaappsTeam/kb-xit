@@ -65,7 +65,7 @@ The module consists of:
 
 Base package:
 
-com.kb.trading.marketdata
+com.kbquants.marketdata
 
 Subpackages:
 

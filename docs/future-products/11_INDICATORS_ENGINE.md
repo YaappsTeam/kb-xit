@@ -66,7 +66,7 @@ The engine consists of:
 
 Base package:
 
-com.kb.trading.indicators
+com.kbquants.indicators
 
 Subpackages:
 
