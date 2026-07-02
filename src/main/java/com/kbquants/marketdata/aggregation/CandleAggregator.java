@@ -3,10 +3,14 @@ package com.kbquants.marketdata.aggregation;
 
 import com.kbquants.marketdata.model.Candle;
 import com.kbquants.marketdata.model.Timeframe;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.function.Consumer;
 
 public class CandleAggregator {
+
+    private static final Logger log = LoggerFactory.getLogger(CandleAggregator.class);
 
     private final Timeframe timeframe;
     private final String symbol;
@@ -59,6 +63,8 @@ public class CandleAggregator {
                 .timeframe(timeframe)
                 .build();
 
+        log.debug("Emitting aggregated candle symbol={} timeframe={} bucketStart={}",
+                symbol, timeframe, currentBucket.getBucketStart());
         onCandleComplete.accept(candle);
     }
 }
