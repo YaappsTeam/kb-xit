@@ -1,8 +1,11 @@
 package com.kbquants.marketdata.aggregation;
 
-import lombok.Getter;
-
-@Getter
+/**
+ * Mutable accumulator for a single time bucket while a candle is being formed.
+ *
+ * <p>This is engine state, not a domain model, so Lombok is intentionally not
+ * used here (per coding standards, Lombok is restricted to domain models).
+ */
 public class TimeBucket {
 
     private final long bucketStart;
@@ -19,14 +22,14 @@ public class TimeBucket {
         this.bucketStart = bucketStart;
     }
 
-    public void update(double priceOpen, double priceHigh, double priceLow, double priceClose, long vol) {
+    public void update(double priceOpen, double priceHigh, double priceLow, double priceClose, long incomingVolume) {
 
         if (!initialized) {
             this.open = priceOpen;
             this.high = priceHigh;
             this.low = priceLow;
             this.close = priceClose;
-            this.volume = vol;
+            this.volume = incomingVolume;
             this.initialized = true;
             return;
         }
@@ -34,6 +37,34 @@ public class TimeBucket {
         this.high = Math.max(this.high, priceHigh);
         this.low = Math.min(this.low, priceLow);
         this.close = priceClose;
-        this.volume += vol;
+        this.volume += incomingVolume;
+    }
+
+    public long getBucketStart() {
+        return bucketStart;
+    }
+
+    public double getOpen() {
+        return open;
+    }
+
+    public double getHigh() {
+        return high;
+    }
+
+    public double getLow() {
+        return low;
+    }
+
+    public double getClose() {
+        return close;
+    }
+
+    public long getVolume() {
+        return volume;
+    }
+
+    public boolean isInitialized() {
+        return initialized;
     }
 }

@@ -1,62 +1,55 @@
 package com.kbquants.marketdata.broker.upstox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.kbquants.marketdata.config.MarketDataConfig;
 import com.kbquants.marketdata.feed.MarketDataFeed;
 import com.kbquants.marketdata.model.Candle;
 import com.kbquants.marketdata.model.Timeframe;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
 import java.util.List;
 
+/**
+ * Upstox implementation of {@link MarketDataFeed}. Currently supports historical
+ * candle retrieval; live streaming is a later phase.
+ */
 public class UpstoxMarketDataFeed implements MarketDataFeed {
+
+    private static final Logger log = LoggerFactory.getLogger(UpstoxMarketDataFeed.class);
 
     private final UpstoxHistoricalClient client;
     private final UpstoxCandleParser parser;
-    private final ObjectMapper mapper;
+    private final ObjectMapper objectMapper;
 
-    public UpstoxMarketDataFeed(String token, ObjectMapper mapper) {
-        this.client = new UpstoxHistoricalClient(token);
+    public UpstoxMarketDataFeed(MarketDataConfig config, ObjectMapper objectMapper) {
+        this.client = new UpstoxHistoricalClient(config);
         this.parser = new UpstoxCandleParser();
-        this.mapper = mapper;
+        this.objectMapper = objectMapper;
     }
 
     @Override
     public List<Candle> getHistoricalCandles(String symbol, Timeframe timeframe, LocalDate from, LocalDate to) {
 
         try {
-            String raw = client.fetch(symbol, mapTimeframe(timeframe), from, to);
-            UpstoxCandleResponse response = mapper.readValue(raw, UpstoxCandleResponse.class);
+            String interval = UpstoxIntervalMapping.toInterval(timeframe);
+            String rawResponse = client.fetchHistoricalCandles(symbol, interval, from, to);
+            UpstoxCandleResponse response = objectMapper.readValue(rawResponse, UpstoxCandleResponse.class);
 
-            return parser.parse(response, symbol, timeframe);
+            List<Candle> candles = parser.parse(response, symbol, timeframe);
+            log.info("Fetched historical candles symbol={} timeframe={} count={}", symbol, timeframe, candles.size());
+            return candles;
 
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+        } catch (Exception exception) {
+            log.error("Failed to fetch historical candles symbol={} timeframe={}", symbol, timeframe, exception);
+            throw new IllegalStateException("Failed to fetch historical candles for symbol=" + symbol, exception);
         }
     }
-
-//    @Override
-//    public void subscribe(String symbol,
-//                          Timeframe timeframe,
-//                          CandleListener listener) {
-//
-//        // TODO: WebSocket implementation (Phase 2)
-//    }
 
     @Override
     public void unsubscribe(String symbol) {
-        // TODO
-    }
-
-    private String mapTimeframe(Timeframe tf) {
-        switch (tf) {
-            case ONE_MIN:
-                return "1minute";
-            case FIVE_MIN:
-                return "5minute";
-            case FIFTEEN_MIN:
-                return "15minute";
-            default:
-                throw new IllegalArgumentException("Unsupported TF");
-        }
+        // Live subscription is not yet implemented; nothing to unsubscribe.
+        log.debug("unsubscribe called for symbol={} (live feed not yet implemented)", symbol);
     }
 }
