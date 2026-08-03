@@ -46,6 +46,13 @@
       <version>5.2.3</version>
     </dependency>
 
+    <!-- Upstox Java SDK: live market data (WebSocket) + OAuth login -->
+    <dependency>
+      <groupId>com.upstox.api</groupId>
+      <artifactId>upstox-java-sdk</artifactId>
+      <version>1.27</version>
+    </dependency>
+
     <!-- JUnit 5 -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>

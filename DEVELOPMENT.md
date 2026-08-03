@@ -4,12 +4,12 @@
 
 ## 1. What this project is
 
-`xit-mc` (Maven artifact `com.kbquants:xit-mc`) is a Java 17 research engine for simulating and evaluating **exit strategies for trades** — specifically stop-loss and profit-ownership ("trailing lock-in") logic — against synthetically generated price paths. It is a backtesting/research sandbox, not a live trading system: there is no broker integration, no order execution, and no persistence layer yet.
+`xit-mc` (Maven artifact `com.kbquants:xit-mc`) is a Java 17 research engine for simulating and evaluating **exit strategies for trades** — specifically stop-loss and profit-ownership ("trailing lock-in") logic — against synthetically generated *and, as of this update, real live* price paths. It is primarily a backtesting/research sandbox, not a full live trading system: there is now a live market data connection (Upstox), but still no order execution/broker trading integration and no persistence layer.
 
 The core question the codebase is built to answer is: *given a price path, how does a trade's stop-loss evolve under different combinations of exit "personality" (Conservative/Moderate/Aggressive) and profit-ownership strategy (Continuous vs. Milestone-based), and how does it perform (max favorable/adverse excursion, final phase, forced exit, etc.)?*
 
-**Build:** Maven, Java 17, Lombok, Logback (JSON/structured logging via `logstash-logback-encoder`), Apache POI (declared, not yet used), JUnit 5.
-**Current state:** `mvn test` → **52/52 tests passing**, `BUILD SUCCESS`. No `main()` entry point exists yet — the project is a library of engine + simulation components exercised only by tests.
+**Build:** Maven, Java 17, Lombok, Logback (JSON/structured logging via `logstash-logback-encoder`), Apache POI (declared, not yet used), the official Upstox Java SDK (`com.upstox.api:upstox-java-sdk:1.27`, live market data), JUnit 5.
+**Current state:** `mvn test` → **65/65 tests passing**, `BUILD SUCCESS`. No `main()` entry point exists yet — the project is a library of engine + simulation components exercised only by tests.
 
 ## 2. Package layout
 
@@ -18,6 +18,7 @@ com.kbquants
 ├── config       🟡  Configuration loading (all classes are empty stubs)
 ├── domain       ✅  Core value/state objects (Phase, TradeContext, enums, snapshots)
 ├── engine       ✅  The exit/stop-loss/ownership rules engine
+├── live         ✅  Live market data via Upstox (OAuth login + WebSocket feed)
 ├── session      ✅  Wraps the engine into a "trading session" driven by a price feed
 └── simulation   ✅  Synthetic price generation, batch execution ("runner"), and reporting
     ├── report   ✅  Console / CSV / JSON formatting of results
@@ -72,6 +73,40 @@ Wraps a `TradeContext` + `ExitEngine` behind a `PriceListener`, so it can be dri
 
 **Test coverage:** `TradingSessionTest` (3 tests), `DeterministicSimulationFeedTest` (1 test).
 
+### 5.1 Live market data (`com.kbquants.live`) — ✅ Implemented (Upstox)
+
+`TradingMode.LIVE` now has a real feed behind it. This package integrates with **Upstox** (`https://upstox.com`) via the official `com.upstox.api:upstox-java-sdk:1.27` Maven dependency, and plugs into the existing `MarketDataFeed`/`PriceListener` abstraction — no changes were needed to `TradingSession` itself.
+
+- **`UpstoxCredentials`** — immutable holder for `apiKey`, `apiSecret`, `redirectUri`, `accessToken`, `sandbox`. `UpstoxCredentials.fromEnv()` reads `UPSTOX_API_KEY`, `UPSTOX_API_SECRET`, `UPSTOX_REDIRECT_URI` (required), `UPSTOX_ACCESS_TOKEN` (optional — see below), and `UPSTOX_SANDBOX` (optional, default `false`) from the process environment. No secrets are stored in the repo.
+- **`UpstoxAuthService`** — implements Upstox's OAuth2 authorization-code flow:
+  - `buildAuthorizationUrl(state)` → the URL to open in a browser (`GET /v2/login/authorization/dialog`).
+  - `exchangeCodeForToken(code)` → exchanges the `code` from the redirect callback for an access token (`POST /v2/login/authorization/token`), via the SDK's `LoginApi`.
+  - **This step is inherently manual/interactive** — Upstox requires a human login (password + TOTP/2FA) in a browser; there is no supported headless/fully-automated login. Access tokens expire daily (Upstox invalidates them each night), so this flow must be re-run once per trading day and the resulting token supplied as `UPSTOX_ACCESS_TOKEN` (or wired in programmatically) before starting the live feed.
+- **`UpstoxMarketDataFeed implements MarketDataFeed`** — the live feed itself. Wraps the SDK's `MarketDataStreamerV3` WebSocket client in `LTPC` mode (last-traded-price-and-close only — the cheapest subscription tier, matching what the engine actually consumes). `start(listener)` connects asynchronously (auto-reconnect enabled) and forwards each tick as `listener.onPrice(ltp, lastTradedTime)` for every subscribed instrument key; `stop()` disconnects. Constructor validates that an access token and at least one instrument key are present, failing fast with a clear message otherwise.
+
+**Test coverage:** `UpstoxCredentialsTest` (4), `UpstoxAuthServiceTest` (2 — authorization URL construction for prod/sandbox, with/without `state`), `UpstoxMarketDataFeedTest` (7 — constructor validation, plus the tick-mapping logic (`dispatchUpdate`) exercised directly against hand-built SDK payload objects). The actual WebSocket connection and OAuth token exchange are **not** exercised by tests — they require live network access and real credentials, which are unavailable in the environment these were developed in (see the callout below).
+
+> ⚠️ **Not connectivity-tested.** The remote sandbox this was built in blocks all outbound access to `upstox.com`/`api.upstox.com` at the network-policy level (the proxy rejects the CONNECT tunnel outright). The code was written and verified against the real SDK — its classes were decompiled locally (`javap`) and its sources jar was inspected to confirm exact method signatures, request paths, and field names, rather than guessed — and it compiles and unit-tests cleanly. But end-to-end connectivity (OAuth token exchange, the WebSocket handshake, and live tick delivery) has **not** been verified against Upstox's actual servers. Test this from an environment with outbound network access before relying on it for anything live.
+
+**Usage sketch:**
+```java
+UpstoxCredentials credentials = UpstoxCredentials.fromEnv();
+
+// Once per trading day, if UPSTOX_ACCESS_TOKEN isn't already set:
+UpstoxAuthService authService = new UpstoxAuthService(credentials);
+System.out.println("Visit: " + authService.buildAuthorizationUrl(null));
+// ... user logs in, app receives ?code=... on the redirect URI ...
+String accessToken = authService.exchangeCodeForToken(code);
+
+UpstoxMarketDataFeed feed = new UpstoxMarketDataFeed(
+        new UpstoxCredentials(credentials.getApiKey(), credentials.getApiSecret(),
+                credentials.getRedirectUri(), accessToken, credentials.isSandbox()),
+        Set.of("NSE_EQ|INE848E01016"));
+
+TradingSession session = new TradingSession(TradingMode.LIVE, tradeContext);
+feed.start(session);
+```
+
 ## 6. Simulation layer (`com.kbquants.simulation`) — ✅ Implemented (generation, execution, reporting)
 
 This layer generates synthetic price data and batch-executes the engine across combinations of exit models and ownership modes for research purposes.
@@ -117,14 +152,15 @@ These are things that are scaffolded (interfaces, enums, empty classes) but not 
 - **`CandleGenerator`** is an empty stub — no tick→5m candle aggregation yet, so `Candle5m` is currently unused.
 - **`hybridEnabled`/`hybridUpdateCount`/`atr`/`ownershipPercentage` fields on `TradeContext`** are declared and have getters/setters (and are read by `MetricsCollector`), but nothing in the engine currently writes to `atr`, `ownershipPercentage`, or increments `hybridUpdateCount` — these look like hooks for planned-but-unbuilt features (ATR-based sizing, a "hybrid" tick/candle update mode).
 - **`PHASE_4` (forced EOD exit)** is defined in the `Phase` enum but `PhaseManager` has no transition logic into it — forced exit today only happens via the explicit `ExitEngine.forceExit()` call, not automatically at end-of-day.
-- **Live/paper/historical trading modes** (`TradingMode.HISTORICAL/PAPER/LIVE`) are declared but have no corresponding `MarketDataFeed` implementations — only `SIMULATION` (via `DeterministicSimulationFeed`) is functional.
-- **No persistence, no broker/exchange integration, no config files** (despite Apache POI being a declared dependency, nothing currently reads/writes spreadsheets).
+- **`HISTORICAL`/`PAPER` trading modes** (`TradingMode`) are still declared but have no corresponding `MarketDataFeed` implementations — only `SIMULATION` (`DeterministicSimulationFeed`) and now `LIVE` (`UpstoxMarketDataFeed`, see §5.1) are functional.
+- **The Upstox live feed is untested against real network/servers** — see the callout in §5.1. It was implemented against the real SDK's decompiled bytecode/sources (not guessed), and passes unit tests for everything that doesn't require network access, but the OAuth token exchange and WebSocket connection have not been exercised end-to-end because this sandbox blocks outbound access to `upstox.com`.
+- **No persistence, no order execution/broker trading integration** (despite Apache POI being a declared dependency, nothing currently reads/writes spreadsheets). The new Upstox integration (§5.1) covers market *data* only — no order placement, portfolio, or account APIs are wired up.
 - **Runner-level classes lack dedicated unit tests**: `SequentialCombinationExecutor`, `ParallelCombinationExecutor`, `SimulationRequest`, `SimulationResult`, and `SimulationRunner` have no test classes of their own yet (only exercised indirectly).
 
 ## 8. Test suite summary
 
 ```
-52 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+65 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |
@@ -136,8 +172,11 @@ These are things that are scaffolded (interfaces, enums, empty classes) but not 
 | `ContinuousOwnershipStrategyTest` | 5 |
 | `PhaseManagerTest` | 5 |
 | `StochasticPricePathGeneratorTest` | 8 |
+| `UpstoxMarketDataFeedTest` | 7 |
 | `TradingSessionTest` | 3 |
 | `SimulationReporterTest` | 3 |
+| `UpstoxCredentialsTest` | 4 |
+| `UpstoxAuthServiceTest` | 2 |
 | `DeterministicSimulationFeedTest` | 1 |
 | `ConsoleReportFormatterTest` | 1 |
 | `CsvReportFormatterTest` | 1 |
@@ -147,10 +186,12 @@ Run with: `mvn test`
 
 ## 9. Suggested next steps (not yet started)
 
-1. Implement `com.kbquants.config` so thresholds/percentages/seeds are externally configurable (JSON/YAML) instead of hardcoded constants.
-2. Give `ExitModel` real behavioral differences (e.g., varying the hard-safety %, phase trigger %, or ownership curve per model).
-3. Wire `ParallelCombinationExecutor` into `SimulationRunner.resolveExecutor()`.
-4. Add a `main()`/CLI entry point that builds a `SimulationRequest`, runs `SimulationRunner`, and prints via `SimulationReporter`.
-5. Implement `CandleGenerator` and start consuming `Candle5m`.
-6. Add direct unit tests for the `runner` package's orchestration classes.
+1. **Verify the Upstox live feed against real network access and real credentials** — from an environment that isn't blocked from reaching `upstox.com` (this sandbox is). Confirm the OAuth token exchange, the WebSocket handshake/subscription, and that `TradingSession` correctly reacts to real ticks.
+2. Implement `com.kbquants.config` so thresholds/percentages/seeds (and possibly `UpstoxCredentials`) are externally configurable (JSON/YAML) instead of hardcoded constants/env vars.
+3. Give `ExitModel` real behavioral differences (e.g., varying the hard-safety %, phase trigger %, or ownership curve per model).
+4. Wire `ParallelCombinationExecutor` into `SimulationRunner.resolveExecutor()`.
+5. Add a `main()`/CLI entry point that builds a `SimulationRequest`, runs `SimulationRunner`, and prints via `SimulationReporter`.
+6. Implement `CandleGenerator` and start consuming `Candle5m`.
+7. Add direct unit tests for the `runner` package's orchestration classes.
+8. Consider a `HISTORICAL` `MarketDataFeed` implementation (Upstox also exposes historical candle APIs) to backtest against real past data instead of only synthetic price paths.
 7. Decide the fate of unused `TradeContext` fields (`atr`, `ownershipPercentage`, `hybridEnabled`/`hybridUpdateCount`) — either build the features they hint at, or remove them.
