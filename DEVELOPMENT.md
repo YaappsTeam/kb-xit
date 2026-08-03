@@ -8,8 +8,8 @@
 
 The core question the codebase is built to answer is: *given a price path, how does a trade's stop-loss evolve under different combinations of exit "personality" (Conservative/Moderate/Aggressive) and profit-ownership strategy (Continuous vs. Milestone-based), and how does it perform (max favorable/adverse excursion, final phase, forced exit, etc.)?*
 
-**Build:** Maven, Java 17, Lombok, Logback (JSON/structured logging via `logstash-logback-encoder`), Apache POI (declared, not yet used), the official Upstox Java SDK (`com.upstox.api:upstox-java-sdk:1.27`, live market data), JUnit 5.
-**Current state:** `mvn test` → **65/65 tests passing**, `BUILD SUCCESS`. No `main()` entry point exists yet — the project is a library of engine + simulation components exercised only by tests.
+**Build:** Maven, Java 17, Lombok, Logback (JSON/structured logging via `logstash-logback-encoder`), Apache POI (declared, not yet used), the official Upstox Java SDK (`com.upstox.api:upstox-java-sdk:1.27`, live market data + order-fill events), JUnit 5. Telegram alerting uses only the JDK's built-in `java.net.http.HttpClient` — no extra dependency.
+**Current state:** `mvn test` → **86/86 tests passing**, `BUILD SUCCESS`. No `main()` entry point exists yet — the project is a library of engine + simulation components exercised only by tests.
 
 ## 2. Package layout
 
@@ -18,7 +18,8 @@ com.kbquants
 ├── config       🟡  Configuration loading (all classes are empty stubs)
 ├── domain       ✅  Core value/state objects (Phase, TradeContext, enums, snapshots)
 ├── engine       ✅  The exit/stop-loss/ownership rules engine
-├── live         ✅  Live market data via Upstox (OAuth login + WebSocket feed)
+├── live         ✅  Live market data + order-fill events via Upstox (OAuth login, two WebSocket feeds)
+├── notification ✅  Telegram alerting (MVP stand-in for future order placement)
 ├── session      ✅  Wraps the engine into a "trading session" driven by a price feed
 └── simulation   ✅  Synthetic price generation, batch execution ("runner"), and reporting
     ├── report   ✅  Console / CSV / JSON formatting of results
@@ -107,6 +108,30 @@ TradingSession session = new TradingSession(TradingMode.LIVE, tradeContext);
 feed.start(session);
 ```
 
+### 5.2 MVP: fill-triggered Telegram profit alerts (`com.kbquants.live` + `com.kbquants.notification`) — ✅ Implemented
+
+The intended end-to-end system is: react to a real order fill → watch that trade's live price → act on the exit rules. This MVP slice implements the first two steps and, instead of acting (placing a real exit order), just **sends a Telegram notification** at a series of profit milestones. Placing real limit/GTT exit orders at these same milestones is explicitly the *next* step, not part of this MVP — nothing in this slice places, modifies, or cancels any order.
+
+**Trigger — order fills, not our own decisions.** Entries are assumed to be placed elsewhere (this codebase never places a buy order); this system only reacts once Upstox confirms one filled.
+
+- **`TradeFillEvent`** / **`TradeFillListener`** — a confirmed BUY fill (order id, instrument key, average fill price, filled quantity) and the callback interface for it.
+- **`UpstoxOrderFillFeed`** — listens to Upstox's *other* WebSocket, the portfolio-stream-feed (`GET /v2/feed/portfolio-stream-feed/authorize`, order-updates only — position/holding/GTT updates are not requested), via the SDK's `PortfolioDataStreamer`. Filters for `transactionType == "BUY"` and `status == "complete"` (matched case-insensitively, since exact casing could not be verified against a live payload — see the network caveat in §5.1) and surfaces those as `TradeFillEvent`s. This is a genuinely separate WebSocket connection from the market-data feed in §5.1, each with its own Upstox "authorize" call and its own short-lived signed connection URL, confirmed by reading the SDK's decompiled source rather than assuming.
+
+**Watch — reuse the existing live price feed.** On each fill, a `ProfitMilestoneTracker(entryPrice)` is created and a new `UpstoxMarketDataFeed` (§5.1) is started for just that instrument.
+
+- **`ProfitMilestoneTracker`** (in `com.kbquants.notification`) — pure, per-trade ratchet: given the live price, returns the highest new profit-from-entry milestone crossed since the last check (or nothing), each milestone firing exactly once, ascending only — the same one-shot-ratchet pattern `PhaseManager` already uses for its 6%/13% transitions, just applied to a separate, finer-grained ladder: **0.5% → 1% → 2% → 3% → 5% → 8% → 13%** (`ProfitMilestoneTracker.DEFAULT_THRESHOLDS_PERCENT`). If price jumps past several thresholds in one tick, only the highest is reported (one message per tick, not one per skipped milestone).
+
+**Notify — Telegram, swappable later.** `Notifier` is a one-method interface (`send(String)`) specifically so this step can later be replaced or supplemented with real order placement without redesigning the trigger/watch pieces.
+
+- **`TelegramCredentials`** — `TelegramCredentials.fromEnv()` reads `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from the environment (same no-secrets-in-repo pattern as `UpstoxCredentials`).
+- **`TelegramNotifier implements Notifier`** — calls Telegram's `sendMessage` Bot API endpoint directly via the JDK's built-in `java.net.http.HttpClient` (no extra dependency needed for this part). A failed send is logged, never thrown — a notification hiccup must never interrupt live price monitoring.
+
+**Orchestration — `LiveProfitAlertRunner`.** Wires the three pieces together: `start()` connects `UpstoxOrderFillFeed`; each fill creates a tracker and a per-instrument market-data feed; each price tick checks the tracker and calls the `Notifier` when a milestone is newly crossed. A fill is only tracked once per `orderId` (guards against a duplicate order-update delivery, e.g. after a WebSocket reconnect, opening a second redundant feed).
+
+**Test coverage:** `ProfitMilestoneTrackerTest` (7), `TelegramCredentialsTest` (3), `TelegramNotifierTest` (2 — pure request-body construction only, not the real HTTP call), `UpstoxOrderFillFeedTest` (6 — the BUY+complete filtering logic against hand-built SDK payloads), `LiveProfitAlertRunnerTest` (3 — full orchestration exercised via an injectable fake `MarketDataFeed` factory, so no network is touched: verifies a fill starts watching the right instrument, milestones fire the right notification text, repeated/duplicate fills don't double-track).
+
+> ⚠️ Same caveat as §5.1: the order-fill listener's WebSocket connection and Telegram's `sendMessage` call are both **untested against real network/servers** from this sandbox (both `upstox.com` and `api.telegram.org` are blocked by this environment's outbound network policy — confirmed directly, not assumed). Everything that doesn't require live network access is unit-tested; the two real network calls need verification from an unrestricted environment before relying on this for anything live.
+
 ## 6. Simulation layer (`com.kbquants.simulation`) — ✅ Implemented (generation, execution, reporting)
 
 This layer generates synthetic price data and batch-executes the engine across combinations of exit models and ownership modes for research purposes.
@@ -153,14 +178,15 @@ These are things that are scaffolded (interfaces, enums, empty classes) but not 
 - **`hybridEnabled`/`hybridUpdateCount`/`atr`/`ownershipPercentage` fields on `TradeContext`** are declared and have getters/setters (and are read by `MetricsCollector`), but nothing in the engine currently writes to `atr`, `ownershipPercentage`, or increments `hybridUpdateCount` — these look like hooks for planned-but-unbuilt features (ATR-based sizing, a "hybrid" tick/candle update mode).
 - **`PHASE_4` (forced EOD exit)** is defined in the `Phase` enum but `PhaseManager` has no transition logic into it — forced exit today only happens via the explicit `ExitEngine.forceExit()` call, not automatically at end-of-day.
 - **`HISTORICAL`/`PAPER` trading modes** (`TradingMode`) are still declared but have no corresponding `MarketDataFeed` implementations — only `SIMULATION` (`DeterministicSimulationFeed`) and now `LIVE` (`UpstoxMarketDataFeed`, see §5.1) are functional.
-- **The Upstox live feed is untested against real network/servers** — see the callout in §5.1. It was implemented against the real SDK's decompiled bytecode/sources (not guessed), and passes unit tests for everything that doesn't require network access, but the OAuth token exchange and WebSocket connection have not been exercised end-to-end because this sandbox blocks outbound access to `upstox.com`.
-- **No persistence, no order execution/broker trading integration** (despite Apache POI being a declared dependency, nothing currently reads/writes spreadsheets). The new Upstox integration (§5.1) covers market *data* only — no order placement, portfolio, or account APIs are wired up.
+- **The Upstox live feeds are untested against real network/servers** — see the callouts in §5.1/§5.2. They were implemented against the real SDK's decompiled bytecode/sources (not guessed), and pass unit tests for everything that doesn't require network access, but the OAuth token exchange and both WebSocket connections (market data, order fills) have not been exercised end-to-end because this sandbox blocks outbound access to `upstox.com`. Same for Telegram's `sendMessage` call (`api.telegram.org` is also blocked here).
+- **No order placement at all yet** — `LiveProfitAlertRunner` (§5.2) only *watches* and *notifies*; it never places, modifies, or cancels an order. Real exit execution (limit or GTT orders at the same profit milestones) is the explicitly-planned next step, not built. There is also still no entry-order placement (by design — entries are assumed to happen elsewhere) and no persistence layer (despite Apache POI being a declared dependency, nothing currently reads/writes spreadsheets).
+- **The profit-milestone ladder (0.5%/1%/2%/3%/5%/8%/13%) is independent of the core exit engine** — `ProfitMilestoneTracker` does not read or influence `TradeContext`/`ExitEngine`/`PhaseManager` in any way; it's a parallel, notification-only concept. If/when real exit orders replace the Telegram alert, revisit whether this ladder should instead reuse or align with the existing Phase/ownership thresholds.
 - **Runner-level classes lack dedicated unit tests**: `SequentialCombinationExecutor`, `ParallelCombinationExecutor`, `SimulationRequest`, `SimulationResult`, and `SimulationRunner` have no test classes of their own yet (only exercised indirectly).
 
 ## 8. Test suite summary
 
 ```
-65 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+86 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |
@@ -169,14 +195,19 @@ These are things that are scaffolded (interfaces, enums, empty classes) but not 
 | `StopLossEngineTest` | 6 |
 | `MilestoneOwnershipStrategyTest` | 6 |
 | `MetricsCollectorTest` | 6 |
+| `ProfitMilestoneTrackerTest` | 7 |
+| `UpstoxMarketDataFeedTest` | 7 |
+| `UpstoxOrderFillFeedTest` | 6 |
 | `ContinuousOwnershipStrategyTest` | 5 |
 | `PhaseManagerTest` | 5 |
 | `StochasticPricePathGeneratorTest` | 8 |
-| `UpstoxMarketDataFeedTest` | 7 |
+| `UpstoxCredentialsTest` | 4 |
 | `TradingSessionTest` | 3 |
 | `SimulationReporterTest` | 3 |
-| `UpstoxCredentialsTest` | 4 |
+| `LiveProfitAlertRunnerTest` | 3 |
+| `TelegramCredentialsTest` | 3 |
 | `UpstoxAuthServiceTest` | 2 |
+| `TelegramNotifierTest` | 2 |
 | `DeterministicSimulationFeedTest` | 1 |
 | `ConsoleReportFormatterTest` | 1 |
 | `CsvReportFormatterTest` | 1 |
@@ -186,12 +217,13 @@ Run with: `mvn test`
 
 ## 9. Suggested next steps (not yet started)
 
-1. **Verify the Upstox live feed against real network access and real credentials** — from an environment that isn't blocked from reaching `upstox.com` (this sandbox is). Confirm the OAuth token exchange, the WebSocket handshake/subscription, and that `TradingSession` correctly reacts to real ticks.
-2. Implement `com.kbquants.config` so thresholds/percentages/seeds (and possibly `UpstoxCredentials`) are externally configurable (JSON/YAML) instead of hardcoded constants/env vars.
-3. Give `ExitModel` real behavioral differences (e.g., varying the hard-safety %, phase trigger %, or ownership curve per model).
-4. Wire `ParallelCombinationExecutor` into `SimulationRunner.resolveExecutor()`.
-5. Add a `main()`/CLI entry point that builds a `SimulationRequest`, runs `SimulationRunner`, and prints via `SimulationReporter`.
-6. Implement `CandleGenerator` and start consuming `Candle5m`.
-7. Add direct unit tests for the `runner` package's orchestration classes.
-8. Consider a `HISTORICAL` `MarketDataFeed` implementation (Upstox also exposes historical candle APIs) to backtest against real past data instead of only synthetic price paths.
-7. Decide the fate of unused `TradeContext` fields (`atr`, `ownershipPercentage`, `hybridEnabled`/`hybridUpdateCount`) — either build the features they hint at, or remove them.
+1. **Verify all three Upstox/Telegram network paths against real servers** — from an environment that isn't blocked (this sandbox is): the OAuth token exchange, both WebSocket feeds (market data, order fills), and the Telegram `sendMessage` call. Confirm exact `status`/`transactionType` string casing from a real order-update payload (currently matched case-insensitively as a hedge, per §5.2).
+2. **Replace/augment the Telegram alert with real exit orders** (limit or GTT) at the same profit milestones — this was explicitly called out as the step after this MVP. `Notifier` was deliberately kept as a one-method interface so this can plug in alongside or instead of `TelegramNotifier` without redesigning `LiveProfitAlertRunner`.
+3. Implement `com.kbquants.config` so thresholds/percentages/seeds (and possibly the Upstox/Telegram credentials) are externally configurable (JSON/YAML) instead of hardcoded constants/env vars.
+4. Give `ExitModel` real behavioral differences (e.g., varying the hard-safety %, phase trigger %, or ownership curve per model).
+5. Wire `ParallelCombinationExecutor` into `SimulationRunner.resolveExecutor()`.
+6. Add a `main()`/CLI entry point that builds a `SimulationRequest`, runs `SimulationRunner`, and prints via `SimulationReporter`.
+7. Implement `CandleGenerator` and start consuming `Candle5m`.
+8. Add direct unit tests for the `runner` package's orchestration classes.
+9. Consider a `HISTORICAL` `MarketDataFeed` implementation (Upstox also exposes historical candle APIs) to backtest against real past data instead of only synthetic price paths.
+10. Decide the fate of unused `TradeContext` fields (`atr`, `ownershipPercentage`, `hybridEnabled`/`hybridUpdateCount`) — either build the features they hint at, or remove them.
