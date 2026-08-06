@@ -4,7 +4,13 @@
 
   <groupId>com.kbquants</groupId>
   <artifactId>xit-mc</artifactId>
-  <version>1.0-SNAPSHOT</version>
+  <!-- Semantic Versioning (MAJOR.MINOR.PATCH); see CODING_STANDARDS.md
+       section 12 for the bump policy. 0.4.0 reflects the cumulative
+       feature state as of the testable-MVP milestone: 0.1.0 research
+       engine, 0.2.0 live market data, 0.3.0 Telegram profit alerts,
+       0.4.0 broker abstraction + unified milestones + Telegram control
+       plane + paper trading. -->
+  <version>0.4.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

@@ -233,7 +233,28 @@ When integrating with external SDKs (Upstox, Telegram, future brokers):
 4. **Document the verification** in test-class Javadoc (e.g., "method signatures verified via javap against upstox-java-sdk-1.27.jar").
 5. **Flag unverified assumptions** with comments (e.g., "matched case-insensitively — exact casing from live payload could not be verified").
 
-## 12. Checklist for new code
+## 12. Versioning (Semantic Versioning)
+
+xit-mc follows [Semantic Versioning 2.0.0](https://semver.org/): `MAJOR.MINOR.PATCH`, tracked in `pom.xml`'s `<version>` tag (currently `0.4.0-SNAPSHOT`).
+
+**Pre-1.0 (`0.x.y`).** Per the SemVer spec (§4), while the major version is `0` the public API is considered unstable — any interface can still change between minor versions without it counting as a breaking change in the strict sense. We move to `1.0.0` once the live-broker path (Phase 3 in IMPLEMENTATION_PLAN.md) is wired up and connectivity-verified against real Upstox/Telegram servers. Until then, MINOR is the practical ceiling for day-to-day bumps.
+
+**Bump rules** — decide from the single most significant change in the commit/PR:
+
+| Change type | Bump | Example |
+|---|---|---|
+| Breaking change to a public interface, package move affecting callers, or incompatible behavior/config change | MAJOR (post-1.0) / MINOR (pre-1.0, per SemVer §4) | Changing `MarketDataFeed.start()`'s signature, moving a class consumers depend on |
+| New backward-compatible feature or capability | MINOR | Adding `TelegramCommandHandler`, a new `OwnershipStrategy`, paper trading mode |
+| Backward-compatible bug fix, internal refactor, or dependency bump with no behavior change for consumers | PATCH | Fixing a threshold boundary bug, tightening a log message |
+| Documentation-only change (`.md` files, comments) | No bump | Updating `DEVELOPMENT.md`, `PRODUCT_REQUIREMENTS.md` |
+
+**When to bump:** as part of the same commit/PR that introduces the change — never a separate follow-up commit. Only one component moves per bump: bumping MINOR resets PATCH to `0`; bumping MAJOR resets MINOR and PATCH to `0`.
+
+**`-SNAPSHOT` suffix:** kept for the entire lifetime of active development on a version. Only drop it when actually cutting a release build/tag — day-to-day commits on this branch always carry `-SNAPSHOT`.
+
+**Where:** `pom.xml` → `<version>X.Y.Z-SNAPSHOT</version>` is the single source of truth. If a version-history comment above it (like the one currently there) would go stale or misleading after the bump, update or remove it in the same commit.
+
+## 13. Checklist for new code
 
 Before submitting any change:
 
@@ -248,4 +269,5 @@ Before submitting any change:
 - [ ] Package dependency direction is respected (no circular deps)
 - [ ] Broker-specific code is behind an interface in `session`; orchestrator never imports broker classes
 - [ ] Thresholds come from `MilestoneLadder`, not hardcoded independently
+- [ ] `pom.xml` version bumped per section 12, if this change touches `src/main`
 - [ ] Commit message follows conventions (section 10)
