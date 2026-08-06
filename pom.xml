@@ -53,6 +53,15 @@
       <version>1.27</version>
     </dependency>
 
+    <!-- Gson: already pulled in transitively by upstox-java-sdk; pinned
+         explicitly since we use it directly to parse Telegram's getUpdates
+         response. -->
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.8.8</version>
+    </dependency>
+
     <!-- JUnit 5 -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
@@ -81,6 +90,30 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.1.2</version>
+      </plugin>
+
+      <!-- Builds a runnable fat jar (dependencies bundled) via
+           `mvn package`, so `java -jar target/xit-mc-1.0-SNAPSHOT.jar`
+           works without a separate classpath. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.1</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.kbquants.Main</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
 
     </plugins>

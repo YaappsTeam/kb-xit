@@ -1,13 +1,9 @@
-package com.kbquants.live;
+package com.kbquants.session;
 
 import lombok.Getter;
 
 import java.util.Objects;
 
-/**
- * A confirmed BUY order fill, as reported by Upstox's order-update
- * WebSocket stream (see UpstoxOrderFillFeed).
- */
 @Getter
 public final class TradeFillEvent {
 

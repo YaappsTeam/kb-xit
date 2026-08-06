@@ -1,5 +1,8 @@
 package com.kbquants.live;
 
+import com.kbquants.session.OrderFillFeed;
+import com.kbquants.session.TradeFillEvent;
+import com.kbquants.session.TradeFillListener;
 import com.upstox.ApiClient;
 import com.upstox.Configuration;
 import com.upstox.feeder.OrderUpdate;
@@ -9,19 +12,8 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * Listens to Upstox's portfolio-stream-feed WebSocket (order updates only --
- * position/holding/GTT updates are not requested) and surfaces only
- * confirmed BUY fills as TradeFillEvents. This is the trigger for starting
- * live profit-milestone monitoring on a trade (see LiveProfitAlertRunner).
- * <p>
- * Order status ("complete") and transaction type ("BUY") string values are
- * matched case-insensitively, since exact casing could not be verified
- * against a live payload from this development environment -- see the
- * network-access caveat in DEVELOPMENT.md.
- */
 @Slf4j
-public class UpstoxOrderFillFeed {
+public class UpstoxOrderFillFeed implements OrderFillFeed {
 
     private static final String COMPLETE_STATUS = "complete";
     private static final String BUY_TRANSACTION_TYPE = "BUY";
@@ -38,6 +30,7 @@ public class UpstoxOrderFillFeed {
         }
     }
 
+    @Override
     public void start(TradeFillListener listener) {
         Objects.requireNonNull(listener, "listener must not be null");
 
@@ -55,6 +48,7 @@ public class UpstoxOrderFillFeed {
         streamer.connect();
     }
 
+    @Override
     public void stop() {
         if (streamer != null) {
             streamer.disconnect();

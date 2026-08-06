@@ -1,19 +1,22 @@
 package com.kbquants.engine;
 
-
+import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.Phase;
 import com.kbquants.domain.TradeContext;
 
-/**
- * Handles phase transitions for a trade.
- * V0 Rules:
- * PHASE_1 -> PHASE_2 at +6%
- * PHASE_2 -> PHASE_3 at +13%
- */
 public class PhaseManager {
 
-    private static final double PHASE2_TRIGGER_PERCENT = 0.06; // 6%
-    private static final double PHASE3_TRIGGER_PERCENT = 0.13; // 13%
+    private final double phase2TriggerFraction;
+    private final double phase3TriggerFraction;
+
+    public PhaseManager() {
+        this(MilestoneLadder.defaultLadder());
+    }
+
+    public PhaseManager(MilestoneLadder ladder) {
+        this.phase2TriggerFraction = ladder.phaseTriggerFraction(Phase.PHASE_2);
+        this.phase3TriggerFraction = ladder.phaseTriggerFraction(Phase.PHASE_3);
+    }
 
     public void evaluatePhaseTransition(double currentPrice, TradeContext context) {
 
@@ -24,7 +27,6 @@ public class PhaseManager {
             case PHASE_2 -> handlePhase2(currentPrice, context);
 
             default -> {
-                // No transitions for now
             }
         }
     }
@@ -32,7 +34,7 @@ public class PhaseManager {
     private void handlePhase1(double currentPrice, TradeContext context) {
 
         double triggerPrice =
-                context.getEntryPrice() * (1 + PHASE2_TRIGGER_PERCENT);
+                context.getEntryPrice() * (1 + phase2TriggerFraction);
 
         if (currentPrice >= triggerPrice) {
             context.setCurrentPhase(Phase.PHASE_2);
@@ -42,7 +44,7 @@ public class PhaseManager {
     private void handlePhase2(double currentPrice, TradeContext context) {
 
         double triggerPrice =
-                context.getEntryPrice() * (1 + PHASE3_TRIGGER_PERCENT);
+                context.getEntryPrice() * (1 + phase3TriggerFraction);
 
         if (currentPrice >= triggerPrice) {
             context.setCurrentPhase(Phase.PHASE_3);

@@ -1,29 +1,23 @@
 package com.kbquants.engine;
 
-
+import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.Phase;
 import com.kbquants.domain.TradeContext;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * Locks profit only at defined profit milestones.
- */
 public class MilestoneOwnershipStrategy implements OwnershipStrategy {
 
     private final StopLossEngine stopLossEngine;
-    // Ordered milestones (ascending)
-    private final Map<Double, Double> milestoneOwnershipMap = new LinkedHashMap<>();
+    private final Map<Double, Double> milestoneOwnershipMap;
 
     public MilestoneOwnershipStrategy(StopLossEngine stopLossEngine) {
+        this(stopLossEngine, MilestoneLadder.defaultLadder());
+    }
 
+    public MilestoneOwnershipStrategy(StopLossEngine stopLossEngine, MilestoneLadder ladder) {
         this.stopLossEngine = stopLossEngine;
-
-        milestoneOwnershipMap.put(0.13, 0.30);
-        milestoneOwnershipMap.put(0.21, 0.50);
-        milestoneOwnershipMap.put(0.34, 0.70);
-        milestoneOwnershipMap.put(0.55, 0.85);
+        this.milestoneOwnershipMap = ladder.ownershipLockMap();
     }
 
     @Override

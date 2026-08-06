@@ -6,11 +6,12 @@ Phased roadmap from the current state to a production-ready exit management syst
 
 ## Current state
 
-- **86/86 tests passing**, BUILD SUCCESS
+- **116/116 tests passing**, BUILD SUCCESS. `mvn package` produces a runnable fat jar (`target/xit-mc-1.0-SNAPSHOT.jar`).
 - Exit engine (phase transitions, stop-loss ratchet, ownership strategies) — complete
 - Simulation framework (price generation, batch execution, reporting) — complete
-- Upstox integration (OAuth, market data WebSocket, order fill WebSocket, Telegram one-way alerts) — complete
-- **Gaps:** No broker abstraction (`OrderFillFeed` interface missing), no way to trigger trades for testing, Telegram is one-way (outbound only), milestones and phases are independent systems, ExitEngine not wired into live monitoring
+- Upstox broker implementation (OAuth, market data WebSocket, order fill WebSocket) — complete, broker-agnostic-compatible, not yet wired into `Main`
+- **Phase 2 (Testable MVP) is complete** — see the checked-off acceptance criteria below. Paper trading works end-to-end via Telegram.
+- **Remaining gaps going into Phase 3:** live broker mode not wired into `Main`, no real exit order placement, no position reconciliation on startup. See DEVELOPMENT.md §9 for the full gap list.
 
 ---
 
@@ -160,16 +161,20 @@ Wire everything together for a runnable paper trading mode.
 
 ### Acceptance criteria (Phase 2 complete when all are true)
 
-- [ ] `OrderFillFeed` interface exists; `UpstoxOrderFillFeed` implements it; orchestrator takes the interface
-- [ ] One `MilestoneLadder` configures notifications, phase transitions, AND ownership locks
-- [ ] Phase triggers are at milestone values (5% and 13%), not independent hardcoded values
-- [ ] Telegram bot accepts `/buy`, `/exit`, `/status` commands
-- [ ] Paper trading mode works end-to-end: Telegram trigger → simulated prices → milestone alerts → force exit
-- [ ] `ExitEngine` runs on every live tick (stop-loss ratchet, phases, ownership)
-- [ ] Stop-loss hit triggers automatic exit notification
-- [ ] `TradeFillEvent` and `TradeFillListener` live in `session` package (broker-agnostic)
-- [ ] Swapping `SimulatedMarketDataFeed` for `UpstoxMarketDataFeed` requires zero orchestrator changes
-- [ ] All new code has unit tests; all existing tests pass (updated for 5% phase trigger)
+- [x] `OrderFillFeed` interface exists; `UpstoxOrderFillFeed` implements it; orchestrator takes the interface
+- [x] One `MilestoneLadder` configures notifications, phase transitions, AND ownership locks
+- [x] Phase triggers are at milestone values (5% and 13%), not independent hardcoded values
+- [x] Telegram bot accepts `/buy`, `/exit`, `/status` commands
+- [x] Paper trading mode works end-to-end: Telegram trigger → simulated prices → milestone alerts → force exit
+- [x] `ExitEngine` runs on every live tick (stop-loss ratchet, phases, ownership)
+- [x] Stop-loss hit triggers automatic exit notification
+- [x] `TradeFillEvent` and `TradeFillListener` live in `session` package (broker-agnostic)
+- [x] Swapping `SimulatedMarketDataFeed` for `UpstoxMarketDataFeed` requires zero orchestrator changes (feed factory takes `TradeFillEvent`, returns `MarketDataFeed` — same shape for both)
+- [x] All new code has unit tests; all existing tests pass (updated for 5% phase trigger); 116/116 passing
+
+**Note on `LiveProfitAlertRunner`:** deleted rather than kept alongside `TradeMonitor` — it was a strict subset of `TradeMonitor`'s behavior (notifications only, no `ExitEngine`, no force-exit, no Telegram commands), so keeping both would have meant two orchestrators with overlapping responsibility. All of its tests were ported to `TradeMonitorTest`.
+
+**Note on `TelegramBot` facade:** the plan originally proposed a `TelegramBot` class combining `TelegramNotifier` + `TelegramCommandHandler`. Skipped in favor of wiring both directly in `Main` — a facade would need the `TelegramCommandListener` (`TradeMonitor`) at construction time, but `TradeMonitor` itself needs a `Notifier` at construction time, creating a circular-construction problem the facade would have to work around with mutable setters. Direct wiring in `Main` (notifier first, then `TradeMonitor`, then `TelegramCommandHandler`) avoids the cycle with no added abstraction.
 
 ### Implementation order
 
