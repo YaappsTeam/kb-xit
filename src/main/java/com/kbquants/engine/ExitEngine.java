@@ -1,5 +1,6 @@
 package com.kbquants.engine;
 
+import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.TradeContext;
 
 public class ExitEngine {
@@ -9,10 +10,13 @@ public class ExitEngine {
     private final OwnershipStrategy ownershipStrategy;
 
     public ExitEngine(TradeContext context) {
+        this(context, MilestoneLadder.defaultLadder());
+    }
 
-        this.phaseManager = new PhaseManager();
+    public ExitEngine(TradeContext context, MilestoneLadder ladder) {
+        this.phaseManager = new PhaseManager(ladder);
         this.stopLossEngine = new StopLossEngine();
-        this.ownershipStrategy = OwnershipStrategyFactory.create(context.getOwnershipMode(), stopLossEngine);
+        this.ownershipStrategy = OwnershipStrategyFactory.create(context.getOwnershipMode(), stopLossEngine, ladder);
     }
 
     public void forceExit(TradeContext context, double currentPrice) {
@@ -24,21 +28,13 @@ public class ExitEngine {
 
     public void onPriceUpdate(double currentPrice, TradeContext context) {
 
-        // Prevent Further Processing After Close
         if (context.isClosed()) {
             return;
         }
 
-        // 1. Always apply hard safety first
         stopLossEngine.applyHardSafety(context);
-
-        // 2. Evaluate phase transitions
         phaseManager.evaluatePhaseTransition(currentPrice, context);
-
-        // 3. Apply base protection
         stopLossEngine.applyBaseProtectionIfEligible(context);
-
-        // 4. Apply ownership logic
         ownershipStrategy.apply(currentPrice, context);
     }
 }
