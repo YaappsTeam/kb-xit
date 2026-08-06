@@ -1,10 +1,10 @@
 # xit-mc Product Requirements Document
 
-> Version 1.0 — August 2026
+> Version 2.0 — August 2026
 
 ## 1. Product vision
 
-xit-mc is a **trade exit management system** for Indian equity markets. It does not decide what to buy or when to buy it — entries are placed by an external system or by the trader manually. xit-mc takes over the moment a BUY order is confirmed, monitors the live price, and manages the entire exit lifecycle: protecting capital, locking in profit, and ultimately exiting the position according to configurable rules.
+xit-mc is a **trade exit management system** for Indian equity markets. It does not decide what to buy or when to buy it — entry decisions are made by the trader. xit-mc accepts a trade invocation (the user says "I'm in this trade"), monitors the live price, and manages the entire exit lifecycle: protecting capital, locking in profit, and ultimately exiting the position according to configurable rules.
 
 The product answers one question: **given that we are in a trade, when and how do we get out?**
 
@@ -12,132 +12,185 @@ The product answers one question: **given that we are in a trade, when and how d
 
 ### In scope
 
-- Detecting confirmed BUY fills from the broker (Upstox) in real time
-- Subscribing to live price data for filled instruments
+- **Accepting trade invocations** from the user (via Telegram commands in MVP, via broker fill detection in live mode)
+- Subscribing to live price data for active instruments
 - Applying exit rules: stop-loss management, phase transitions, profit-ownership strategies
-- Notifying the trader at profit milestones (Telegram as MVP; real exit orders as the next step)
-- Placing limit/GTT exit orders at profit milestones (post-MVP)
+- Notifying the trader at profit milestones via Telegram
+- Force-exiting a trade on user command
+- Paper trading mode for end-to-end testing without a real broker
+- Broker-agnostic design: plug in any broker without backend code changes
 - Backtesting exit strategies against synthetic and historical price paths
-- Reporting simulation results (console, CSV, JSON)
+- Placing limit/GTT exit orders at profit milestones (post-MVP)
 
 ### Out of scope
 
+- Entry decisions (which stock, when, at what price) — the user makes this call
 - Stock screening / scanning / discovery
-- Entry decisions (which stock, when, at what price)
-- Placing BUY orders
 - Portfolio management across multiple accounts
 - Fundamental or technical analysis
-- Broker integrations other than Upstox (initially)
 
-### Design principle
+### Design principles
 
-Entries happen elsewhere. Exits happen here. The `TradeFillEvent` from the order WebSocket is the contract between the two systems.
+1. **Entries are invocations, not decisions.** The user triggers "I'm buying X at Y" — the app does not care why. It just starts managing the exit.
+2. **Broker-agnostic.** Every broker interaction happens behind an interface. Swap Upstox for Zerodha, or use a simulator — zero backend code changes.
+3. **One milestone ladder drives everything.** Notifications, phase transitions, and ownership locks all derive from a single configurable set of thresholds.
 
 ## 3. Target users
 
-The primary user is the developer-trader (the team itself) running this system alongside an external entry system. There is no multi-user, multi-tenant, or public-facing UI requirement at this stage.
+The primary user is the developer-trader (the team itself) running this system. There is no multi-user, multi-tenant, or public-facing UI requirement at this stage.
 
 ## 4. System architecture
 
+### Broker-agnostic interfaces
+
 ```
-External entry system
+OrderFillFeed (interface)                MarketDataFeed (interface)
+   "where fills come from"                  "where prices come from"
+         |                                        |
+    +---------+-----------+               +--------+-----------+
+    |         |           |               |        |           |
+ Upstox   Telegram    Simulated       Upstox  Simulated  Deterministic
+ (live)   (manual)    (paper)         (live)  (paper)    (backtest)
+```
+
+The orchestrator (`TradeMonitor`) depends only on interfaces — it never imports a broker-specific class.
+
+### MVP flow (Telegram + paper trading)
+
+```
+Trader                    Telegram Bot               TradeMonitor
+  |                           |                          |
+  |-- /buy INFY 1500 10 ---->|                          |
+  |                           |-- TradeFillEvent ------>|
+  |                           |                          |-- start MarketDataFeed
+  |                           |                          |   (simulated or live)
+  |                           |                          |
+  |                           |<--- "INFY up 0.5%..." --|-- milestone crossed
+  |<-- notification ----------|                          |
+  |                           |                          |
+  |-- /exit order-1 -------->|                          |
+  |                           |-- forceExit ----------->|
+  |<-- "INFY exited" --------|                          |
+```
+
+### Live flow (real broker)
+
+```
+External system places BUY on broker
         |
-        | (places BUY order on Upstox)
         v
-    Upstox Broker
+    Broker (Upstox / any)
         |
-        |--- Order WebSocket (/v2/feed/portfolio-stream-feed)
+        |--- OrderFillFeed (broker WebSocket)
         |        |
         |        v
-        |   UpstoxOrderFillFeed
+        |   TradeMonitor (orchestrator)
         |        |
-        |        | TradeFillEvent (orderId, instrumentKey, avgPrice, qty)
+        |        | per-trade: MilestoneTracker + ExitEngine
         |        v
-        |   LiveProfitAlertRunner (orchestrator)
-        |        |
-        |        | creates ProfitMilestoneTracker per trade
-        |        | starts MarketDataFeed per instrument
-        |        v
-        |--- Market Data WebSocket (/v3/feed/market-data-feed)
+        |--- MarketDataFeed (broker WebSocket)
                  |
                  | price ticks
                  v
-            ProfitMilestoneTracker  -----> Notifier (Telegram / future: limit orders)
-            ExitEngine (future)    -----> Order placement (future)
+            Unified milestone ladder
+              |        |         |
+        Notification  Phase    Ownership
+        (Telegram)  transition  lock
 ```
 
-Two separate Upstox WebSocket connections, each with its own signed connection URL, both derived from the same daily OAuth access token. Market data uses binary protobuf frames; order updates use JSON strings.
+Same `TradeMonitor`, same milestone ladder, same exit engine. Only the `OrderFillFeed` and `MarketDataFeed` implementations change.
 
 ## 5. Core features
 
-### F1. Order fill detection
+### F1. Trade invocation (entry trigger)
+
+The app does NOT make entry decisions. It accepts an invocation: "I am now in this trade."
+
+| Mode | How invocation happens |
+|---|---|
+| **Telegram (MVP)** | User sends `/buy <instrument> <price> <qty>` to the bot |
+| **Live broker** | `OrderFillFeed` detects a confirmed BUY fill from the broker WebSocket |
+| **Paper trading** | User sends `/buy` via Telegram; market data comes from a simulator |
+
+All three paths produce the same `TradeFillEvent(orderId, instrumentKey, averagePrice, filledQuantity)` — the rest of the system does not know or care which path created it.
 
 | Attribute | Detail |
 |---|---|
-| Source | Upstox portfolio-stream-feed WebSocket |
-| Filter | `status == "complete"` AND `transactionType == "BUY"` (case-insensitive) |
-| Output | `TradeFillEvent(orderId, instrumentKey, averagePrice, filledQuantity)` |
-| Dedup | Each `orderId` tracked exactly once (guards against WebSocket re-delivery) |
+| Output | `TradeFillEvent` |
+| Dedup | Each `orderId` tracked exactly once |
+| Interface | `OrderFillFeed` — broker-agnostic |
 
-### F2. Live price monitoring
+### F2. Force exit
+
+| Mode | How it happens |
+|---|---|
+| **Telegram** | User sends `/exit <orderId>` or `/exit all` |
+| **Automatic** | Price drops to or below current stop-loss |
+| **EOD** | PHASE_4 forced close at configurable time (future) |
+
+### F3. Live price monitoring
 
 | Attribute | Detail |
 |---|---|
-| Source | Upstox market-data-feed WebSocket (LTPC mode) |
+| Interface | `MarketDataFeed` — broker-agnostic |
+| Implementations | `UpstoxMarketDataFeed` (live), `SimulatedMarketDataFeed` (paper), `DeterministicSimulationFeed` (backtest) |
 | Granularity | Per-tick (last traded price + timestamp) |
-| Lifecycle | One feed started per filled instrument; runs until trade exits |
+| Lifecycle | One feed started per active instrument; stops when trade exits |
 
-### F3. Profit milestone alerts (MVP)
+### F4. Unified milestone ladder
 
-Notify the trader when profit-from-entry crosses predefined thresholds.
+One configurable ladder drives notifications, phase transitions, AND ownership locks. Changing the ladder in one place updates the entire system's behavior.
 
-| Milestone | Alert |
-|---|---|
-| +0.5% | First profit signal |
-| +1.0% | |
-| +2.0% | |
-| +3.0% | |
-| +5.0% | |
-| +8.0% | |
-| +13.0% | Aligns with Phase 3 trigger |
+**Default ladder:**
+
+| Milestone | Notification | Phase transition | Ownership lock |
+|---|---|---|---|
+| +0.5% | Yes | — | — |
+| +1.0% | Yes | — | — |
+| +2.0% | Yes | — | — |
+| +3.0% | Yes | — | — |
+| +5.0% | Yes | PHASE_1 → PHASE_2 | — |
+| +8.0% | Yes | — | — |
+| +13.0% | Yes | PHASE_2 → PHASE_3 | 30% of open profit |
+| +21.0% | Yes | — | 50% of open profit |
+| +34.0% | Yes | — | 70% of open profit |
+| +55.0% | Yes | — | 85% of open profit |
 
 Rules:
 - Each milestone fires exactly once, ascending only (ratchet — never re-fires)
-- If price jumps past multiple thresholds in one tick, only the highest is reported
-- Notification failure never interrupts price monitoring
+- If price jumps past multiple milestones in one tick, only the highest is reported for notification, but ALL intermediate phase transitions and ownership locks are applied
+- Phase transitions and ownership locks are milestone-driven, not independent
+- The ladder is configurable — change it and the whole system follows
 
-### F4. Exit engine (core rules pipeline)
+### F5. Exit engine (core rules pipeline)
 
-Per-tick pipeline applied to each trade via `ExitEngine.onPriceUpdate(price, context)`:
+Per-tick pipeline applied to each trade:
 
 1. **Hard safety stop** — floor stop-loss at entry price - 20%, every tick, regardless of phase
-2. **Phase transitions**:
-   - PHASE_1 to PHASE_2 when price >= entry x 1.06 (+6%)
-   - PHASE_2 to PHASE_3 when price >= entry x 1.13 (+13%)
+2. **Phase transitions** — driven by the milestone ladder (default: PHASE_2 at +5%, PHASE_3 at +13%)
 3. **Base protection** — once in PHASE_2, ratchet stop-loss up to `basePrice`
-4. **Ownership strategy** (PHASE_3 only) — lock a portion of open profit as the new stop-loss:
-   - *Continuous*: lock 30% of open profit continuously
-   - *Milestone-based*: lock increasing % at fixed profit-from-entry thresholds:
-
-| Profit from entry | Ownership locked |
-|---|---|
-| >= 13% | 30% |
-| >= 21% | 50% |
-| >= 34% | 70% |
-| >= 55% | 85% |
+4. **Ownership strategy** (PHASE_3 only) — lock a portion of open profit, percentage driven by the milestone ladder
 
 All stop-loss writes enforce a **monotonic ratchet** — the stop-loss never moves backward.
 
-### F5. Simulation and backtesting
+### F6. Simulation and backtesting
 
 - Synthetic price generation (stochastic model with regime bias, pullback, seeded randomness)
 - Batch execution of all ExitModel x OwnershipMode combinations over a shared price path
 - Metrics collection: MFE, MAE, final phase, final stop-loss, closure flags
 - Reporting: console table, CSV export, JSON export
 
-### F6. Exit order placement (post-MVP)
+### F7. Paper trading mode
 
-Replace or augment Telegram alerts with real limit/GTT exit orders at the same profit milestones. The `Notifier` interface was designed as a single-method seam (`send(String)`) specifically to make this swap straightforward.
+Full end-to-end flow without a real broker:
+- Trade triggered via Telegram `/buy` command
+- Market data from `SimulatedMarketDataFeed` (random price walks around entry price)
+- Exit engine runs on every simulated tick
+- Milestone notifications sent to Telegram
+- Force exit via Telegram `/exit` command
+- No real orders placed anywhere
+
+Purpose: validate the entire pipeline before connecting to a real broker.
 
 ## 6. Credential management
 
@@ -145,15 +198,14 @@ No secrets are stored in the repository. All credentials are supplied via enviro
 
 | Variable | Purpose | Required |
 |---|---|---|
-| `UPSTOX_API_KEY` | Upstox API key | Yes |
-| `UPSTOX_API_SECRET` | Upstox API secret | Yes |
-| `UPSTOX_REDIRECT_URI` | OAuth redirect URI | Yes |
-| `UPSTOX_ACCESS_TOKEN` | Daily OAuth token (expires nightly) | At runtime |
+| `UPSTOX_API_KEY` | Upstox API key | For live mode |
+| `UPSTOX_API_SECRET` | Upstox API secret | For live mode |
+| `UPSTOX_REDIRECT_URI` | OAuth redirect URI | For live mode |
+| `UPSTOX_ACCESS_TOKEN` | Daily OAuth token (expires nightly) | For live mode |
 | `UPSTOX_SANDBOX` | Use sandbox API (`true`/`false`, default `false`) | No |
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token | For MVP alerts |
-| `TELEGRAM_CHAT_ID` | Telegram chat to receive alerts | For MVP alerts |
-
-The Upstox OAuth flow requires a manual browser login (password + 2FA) once per trading day. There is no supported headless/automated login.
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token | Yes (MVP) |
+| `TELEGRAM_CHAT_ID` | Telegram chat to receive alerts | Yes (MVP) |
+| `TRADING_MODE` | `paper` or `live` (default `paper`) | No |
 
 ## 7. Non-functional requirements
 
@@ -161,14 +213,15 @@ The Upstox OAuth flow requires a manual browser login (password + 2FA) once per 
 |---|---|
 | Language / runtime | Java 17 |
 | Build system | Maven |
-| Broker | Upstox (via official Java SDK v1.27) |
+| Broker abstraction | All broker interactions behind interfaces (`OrderFillFeed`, `MarketDataFeed`) |
 | Notification | Telegram Bot API (JDK HttpClient, no extra deps) |
 | Concurrency | Thread-safe per-trade tracking (`ConcurrentHashMap`) |
-| Resilience | Auto-reconnect on WebSocket disconnect (SDK-level); notification failure logged but never thrown |
+| Resilience | Auto-reconnect on WebSocket disconnect; notification failure logged, never thrown |
 | Credential storage | Environment variables only, never in repo |
-| Test coverage | All business logic unit-tested; network-dependent code tested via fakes/mocks |
+| Pluggability | Swap broker by providing new interface implementations — zero orchestrator changes |
+| Test coverage | All business logic unit-tested; network-dependent code tested via fakes |
 
-## 8. Milestones and phases
+## 8. Milestones and delivery phases
 
 ### Phase 0 — Research sandbox (DONE)
 
@@ -176,58 +229,64 @@ The Upstox OAuth flow requires a manual browser login (password + 2FA) once per 
 - Simulation framework with synthetic price paths
 - Reporting (console, CSV, JSON)
 
-### Phase 1 — MVP live monitoring (DONE)
+### Phase 1 — Upstox integration (DONE)
 
 - Upstox OAuth integration
 - Order-fill detection via portfolio WebSocket
 - Live price monitoring via market-data WebSocket
-- Profit milestone tracking with Telegram notifications
+- Profit milestone tracking with Telegram notifications (one-way)
 - End-to-end orchestration (`LiveProfitAlertRunner`)
 
-### Phase 2 — Real exit orders (NEXT)
+### Phase 2 — Testable MVP (NEXT)
 
-- Replace/augment Telegram alerts with limit/GTT exit orders at profit milestones
-- Position reconciliation on startup (resume monitoring positions filled while offline)
-- Wire the full ExitEngine into live monitoring (stop-loss + phase transitions + ownership)
+- **Broker abstraction**: `OrderFillFeed` interface, move `TradeFillEvent`/`TradeFillListener` to `session` package
+- **Telegram as control plane**: two-way bot (receive `/buy`, `/exit`, `/status` commands; send milestone alerts)
+- **Paper trading mode**: `SimulatedMarketDataFeed` + `ManualOrderFillFeed` for end-to-end testing
+- **Unified milestone ladder**: merge ProfitMilestoneTracker + PhaseManager + ownership thresholds into one configurable system
+- **Wire ExitEngine into live monitoring**: stop-loss + phases + ownership on every price tick
+- **Force exit**: via Telegram `/exit` command
 
-### Phase 3 — Production hardening
+### Phase 3 — Real exit orders
 
-- External configuration (JSON/YAML) for thresholds, percentages, credentials
-- `main()` entry point / CLI
+- Replace/augment Telegram alerts with limit/GTT exit orders at milestones
+- Position reconciliation on startup
 - ExitModel behavioral differentiation (Conservative/Moderate/Aggressive)
+
+### Phase 4 — Production hardening
+
+- External configuration (YAML) for all thresholds
+- `main()` entry point / CLI
 - PHASE_4 (forced EOD exit) automation
-- Historical data feed (Upstox historical candle API)
-
-### Phase 4 — Observability and operations
-
-- Structured logging with trade-level correlation IDs
-- Health checks and monitoring
-- Graceful shutdown and position state persistence
-- Alert escalation (multiple notification channels)
+- Historical data feed
+- Structured logging, health checks, graceful shutdown
 
 ## 9. Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Upstox access token expires daily | Clear documentation of manual OAuth flow; future: auto-refresh wrapper |
-| WebSocket disconnect during trading hours | SDK-level auto-reconnect enabled; future: position reconciliation on reconnect |
-| Missed fill event (WebSocket gap) | Position reconciliation on startup queries open positions |
-| Notification failure during critical price move | Notification failures are logged, never thrown — monitoring continues regardless |
-| Stop-loss never moves backward (by design) | Monotonic ratchet is a feature, not a bug — prevents whipsaw resets |
-| Network-dependent code untested in dev sandbox | All code verified against real SDK bytecode; end-to-end testing required from unrestricted environment |
+| Can't test MVP without real broker | Paper trading mode with simulated feeds — full flow works without network |
+| Upstox access token expires daily | Clear documentation; future auto-refresh wrapper |
+| WebSocket disconnect during trading | SDK auto-reconnect + position reconciliation on reconnect |
+| Milestone/phase misalignment | Single configurable ladder drives both — impossible to drift |
+| Broker lock-in | All broker interactions behind interfaces; swap implementation, not orchestration |
+| Notification failure during critical move | Failures logged, never thrown — monitoring continues |
 
 ## 10. Glossary
 
 | Term | Meaning |
 |---|---|
-| **Entry** | A confirmed BUY order fill — the point at which xit-mc begins tracking a trade |
-| **Exit** | The act of closing a position (stop-loss hit, profit target, or forced close) |
+| **Invocation** | The act of telling xit-mc "I'm in this trade" — via Telegram command or broker fill detection |
+| **Entry** | A confirmed BUY — the point at which xit-mc begins tracking a trade. NOT an entry decision. |
+| **Exit** | Closing a position (stop-loss hit, profit target, or forced close) |
 | **Phase** | Trade lifecycle stage (PHASE_1 through PHASE_4) |
-| **Base price** | The reference price for profit calculations (initially entry x 2.0 in simulation) |
-| **Ownership** | The percentage of open profit locked as stop-loss protection |
-| **Milestone** | A profit-from-entry threshold that triggers a notification or action |
-| **Ratchet** | A value that can only increase, never decrease (applies to stop-loss and milestone tracking) |
+| **Milestone** | A profit-from-entry threshold that triggers notification, phase transition, and/or ownership lock |
+| **Milestone ladder** | The single ordered list of thresholds that drives the entire system |
+| **Ratchet** | A value that can only increase, never decrease (stop-loss, milestone index) |
 | **Hard safety** | Unconditional floor stop-loss at entry - 20% |
-| **LTPC** | Last Traded Price and Close — the lightest Upstox market data subscription mode |
+| **Base price** | The reference price for profit calculations |
+| **Ownership** | The percentage of open profit locked as stop-loss protection |
+| **Paper trading** | Full flow with simulated data — no real broker, no real orders |
+| **OrderFillFeed** | Broker-agnostic interface for "where fills come from" |
+| **MarketDataFeed** | Broker-agnostic interface for "where prices come from" |
 | **GTT** | Good Till Triggered — a broker order type that persists until a price condition is met |
-| **Fill** | A confirmed order execution from the broker |
+| **LTPC** | Last Traded Price and Close — the lightest Upstox market data subscription mode |

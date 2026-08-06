@@ -1,6 +1,6 @@
 # xit-mc Coding Standards
 
-> Version 1.0 — August 2026
+> Version 2.0 — August 2026
 
 Standards, conventions, and testing rules for the xit-mc codebase. Follow these when adding or modifying code to keep the project consistent and maintainable.
 
@@ -18,11 +18,11 @@ Standards, conventions, and testing rules for the xit-mc codebase. Follow these 
 ```
 com.kbquants
 ├── config         Configuration loading and schema
-├── domain         Core value/state objects (immutable where possible)
+├── domain         Core value/state objects (immutable where possible, includes MilestoneLadder)
 ├── engine         Exit rules pipeline (deterministic, no I/O)
-├── live           Broker integration (Upstox WebSockets, OAuth, order placement)
-├── notification   Alerting and notification delivery
-├── session        Trading session abstraction and feed interfaces
+├── live           Broker-specific implementations (Upstox) and orchestration (TradeMonitor)
+├── notification   Alerting, Telegram bot (inbound commands + outbound notifications)
+├── session        Broker-agnostic interfaces (MarketDataFeed, OrderFillFeed, PriceListener, etc.)
 └── simulation     Synthetic data, batch execution, reporting
 ```
 
@@ -31,6 +31,7 @@ com.kbquants
 - One responsibility per package. A class that bridges two packages (e.g., wiring feeds to the engine) belongs in the package that owns the orchestration (`live` for live flows, `simulation.runner` for simulation flows).
 - No circular dependencies between packages. The dependency direction is: `live` / `simulation` -> `session` -> `engine` -> `domain`. `notification` is a leaf — nothing depends on it except the orchestrators.
 - `engine` and `domain` must never import from `live`, `notification`, or `simulation`. They are the pure core.
+- **Broker-agnostic interfaces live in `session`**, not `live`. The `session` package defines `MarketDataFeed`, `OrderFillFeed`, `PriceListener`, `TradeFillListener`, and `TradeFillEvent`. The `live` package holds only broker-specific implementations (e.g., `UpstoxMarketDataFeed`, `UpstoxOrderFillFeed`).
 
 ## 3. Class design
 
@@ -46,8 +47,20 @@ com.kbquants
 
 ### Interfaces over abstract classes
 
-- Define extension points as interfaces (`MarketDataFeed`, `PriceListener`, `Notifier`, `OwnershipStrategy`, `PricePathGenerator`, `CombinationExecutor`).
+- Define extension points as interfaces (`MarketDataFeed`, `OrderFillFeed`, `PriceListener`, `Notifier`, `OwnershipStrategy`, `PricePathGenerator`, `CombinationExecutor`).
 - Keep interfaces small — one or two methods maximum. The `Notifier` interface has a single `send(String)` method by design.
+
+### Broker abstraction
+
+- All broker interactions must go through interfaces defined in the `session` package. The orchestrator (`TradeMonitor`) must never import a broker-specific class directly.
+- To add a new broker: implement `OrderFillFeed`, `MarketDataFeed`, and (when applicable) `ExitOrderPlacer`. Wire them in `Main`. Zero changes to the orchestrator or engine.
+- Broker-specific code (SDK imports, credential handling, WebSocket setup) belongs in the `live` package, never in `session`, `engine`, or `domain`.
+
+### Single source of truth for thresholds
+
+- All profit-from-entry thresholds (notifications, phase transitions, ownership locks) are defined in one `MilestoneLadder` object in the `domain` package.
+- `PhaseManager`, `ProfitMilestoneTracker`, and `MilestoneOwnershipStrategy` all read from this ladder. None of them hardcode their own thresholds independently.
+- Changing the ladder in one place must change the behavior of all three systems.
 
 ### Lombok usage
 
@@ -163,7 +176,9 @@ void shouldDescribeExpectedBehavior() {
 | Component | Fake approach | Example |
 |---|---|---|
 | `MarketDataFeed` | Implement interface; capture the `PriceListener` | `FakeFeed` in `LiveProfitAlertRunnerTest` |
+| `OrderFillFeed` | Implement interface; expose a method to inject fills | `FakeOrderFillFeed` in `TradeMonitorTest` |
 | `Notifier` | Implement interface; record `send()` calls in a list | `RecordingNotifier` in `LiveProfitAlertRunnerTest` |
+| `MilestoneLadder` | Construct with custom thresholds | `new MilestoneLadder(customMilestones)` |
 | Environment variables | Pass `Function<String, String>` to `fromEnv()` | `Map.of(...)::get` in `UpstoxCredentialsTest` |
 | SDK objects (`OrderUpdate`) | Construct directly and set fields | `orderUpdate()` helper in `UpstoxOrderFillFeedTest` |
 | Network calls (HTTP, WebSocket) | Do not test at the unit level | Covered by integration/manual testing |
@@ -231,4 +246,6 @@ Before submitting any change:
 - [ ] Network-facing code handles failures gracefully (log, don't throw)
 - [ ] Engine/domain code remains free of I/O imports
 - [ ] Package dependency direction is respected (no circular deps)
+- [ ] Broker-specific code is behind an interface in `session`; orchestrator never imports broker classes
+- [ ] Thresholds come from `MilestoneLadder`, not hardcoded independently
 - [ ] Commit message follows conventions (section 10)
