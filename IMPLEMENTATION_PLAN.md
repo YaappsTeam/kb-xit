@@ -204,6 +204,8 @@ Steps 2.1, 2.2, and 2.4 can be done in parallel. Steps 2.3 and 2.5 follow. Step 
 | Implementations | `UpstoxExitOrderPlacer` (real), `PaperExitOrderPlacer` (log only) |
 | Wiring | `TradeMonitor` takes optional `ExitOrderPlacer`; calls it on milestone AND on stop-loss hit |
 
+**Prerequisite before this step goes live:** Upstox requires order-placement API calls to originate from a **registered static IP** (SEBI algo-trading circular; scoped to order APIs only — market data/portfolio feeds and read-only APIs are unaffected, so nothing before this step needs it). Register the deployment host's static IP via `PUT /user/ip` before the first live `UpstoxExitOrderPlacer` call. Two operational gotchas: the IP can only be changed **once per calendar week**, and each change **invalidates the current access token** — so this isn't something to rotate casually; pick the production host's IP deliberately.
+
 ### Step 3.2 — Position reconciliation
 
 | Item | Detail |
