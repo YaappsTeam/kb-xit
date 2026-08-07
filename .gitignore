@@ -2,9 +2,10 @@ target/
 dependency-reduced-pom.xml
 !.mvn/wrapper/maven-wrapper.jar
 
-# Local run script -- contains real Telegram credentials once filled
-# in from run.sh.example. Never commit this file.
+# Local run scripts -- contain real Telegram credentials once filled
+# in from run.sh.example / run.ps1.example. Never commit these files.
 run.sh
+run.ps1
 !**/src/main/**/target/
 !**/src/test/**/target/
 
