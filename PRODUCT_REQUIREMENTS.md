@@ -270,6 +270,7 @@ No secrets are stored in the repository. All credentials are supplied via enviro
 | Milestone/phase misalignment | Single configurable ladder drives both — impossible to drift |
 | Broker lock-in | All broker interactions behind interfaces; swap implementation, not orchestration |
 | Notification failure during critical move | Failures logged, never thrown — monitoring continues |
+| Upstox requires a registered static IP for order-placement APIs only (SEBI algo-trading circular); changing it is rate-limited to once/week and invalidates the access token | Doesn't block Phase 0-2 (no order calls yet). Before Phase 3 (`ExitOrderPlacer`): host on infrastructure with a reserved/static public IP, register it via Upstox's `PUT /user/ip`, and treat it as a rarely-changed deployment constant, not something rotated casually |
 
 ## 10. Glossary
 
