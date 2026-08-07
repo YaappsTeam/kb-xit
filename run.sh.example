@@ -1,0 +1,21 @@
+#!/bin/bash
+# Copy this file to run.sh (already gitignored) and fill in your real
+# credentials there. Never commit run.sh -- it will contain your live
+# Telegram bot token. See CODING_STANDARDS.md section 7 for why
+# credentials are always read from the environment, never baked into
+# the build.
+
+set -euo pipefail
+
+export TELEGRAM_BOT_TOKEN="your-telegram-bot-token-here"
+export TELEGRAM_CHAT_ID="your-telegram-chat-id-here"
+# export TRADING_MODE="paper"   # optional -- "paper" is already the default
+
+JAR=$(find target -maxdepth 1 -name 'xit-mc-*.jar' ! -name 'original-*' | head -n 1)
+
+if [ -z "$JAR" ]; then
+  echo "No runnable jar found in target/. Run 'mvn package' first." >&2
+  exit 1
+fi
+
+exec java -jar "$JAR"
