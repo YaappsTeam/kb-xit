@@ -6,12 +6,13 @@ Phased roadmap from the current state to a production-ready exit management syst
 
 ## Current state
 
-- **116/116 tests passing**, BUILD SUCCESS. `mvn package` produces a runnable fat jar (`target/xit-mc-1.0-SNAPSHOT.jar`).
+- **124/124 tests passing**, BUILD SUCCESS. `mvn package` produces a runnable fat jar (`target/xit-mc-1.0-SNAPSHOT.jar`).
 - Exit engine (phase transitions, stop-loss ratchet, ownership strategies) — complete
 - Simulation framework (price generation, batch execution, reporting) — complete
-- Upstox broker implementation (OAuth, market data WebSocket, order fill WebSocket) — complete, broker-agnostic-compatible, not yet wired into `Main`
+- Upstox broker implementation (OAuth, market data WebSocket, order fill WebSocket) — complete and broker-agnostic-compatible
+- **Live Upstox market data is wired into `Main`** via `MARKET_DATA=live`, authenticated with the year-long read-only Analytics Token (`UpstoxDataCredentials`). Paper trades now run against real ticks. The daily OAuth token (`UpstoxCredentials`) and static IP are needed only for order placement, so they stay a Phase 3 concern.
 - **Phase 2 (Testable MVP) is complete** — see the checked-off acceptance criteria below. Paper trading works end-to-end via Telegram.
-- **Remaining gaps going into Phase 3:** live broker mode not wired into `Main`, no real exit order placement, no position reconciliation on startup. See DEVELOPMENT.md §9 for the full gap list.
+- **Remaining gaps going into Phase 3:** the order side is not wired into `Main` (`UpstoxOrderFillFeed` still unused there), no real exit order placement, no position reconciliation on startup. See DEVELOPMENT.md §9 for the full gap list.
 
 ---
 

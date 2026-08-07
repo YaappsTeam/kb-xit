@@ -49,6 +49,31 @@ class TelegramCommandHandlerTest {
         assertEquals(List.of("buy:NSE_EQ|INE848E01016:1500.5:10"), listener.events);
     }
 
+    /**
+     * Upstox index keys contain a space ("NSE_INDEX|Nifty 50"), so the
+     * instrument key is everything between /buy and the trailing
+     * price/quantity pair rather than a single token.
+     */
+    @Test
+    void shouldDispatchBuyCommandForInstrumentKeyContainingSpaces() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/buy NSE_INDEX|Nifty 50 25000.75 50", listener);
+
+        assertEquals(List.of("buy:NSE_INDEX|Nifty 50:25000.75:50"), listener.events);
+    }
+
+    @Test
+    void shouldCollapseExtraWhitespaceWithinMultiWordInstrumentKey() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/buy  NSE_INDEX|Nifty   50   25000  50 ", listener);
+
+        assertEquals(List.of("buy:NSE_INDEX|Nifty 50:25000.0:50"), listener.events);
+    }
+
     @Test
     void shouldIgnoreMalformedBuyCommandWithWrongArgCount() {
 
