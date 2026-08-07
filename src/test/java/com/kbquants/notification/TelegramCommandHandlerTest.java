@@ -19,8 +19,8 @@ class TelegramCommandHandlerTest {
         final List<String> events = new ArrayList<>();
 
         @Override
-        public void onBuy(String instrumentKey, double price, int quantity) {
-            events.add("buy:" + instrumentKey + ":" + price + ":" + quantity);
+        public void onBuy(List<String> args) {
+            events.add("buy:" + String.join("|", args));
         }
 
         @Override
@@ -40,56 +40,47 @@ class TelegramCommandHandlerTest {
     }
 
     @Test
-    void shouldDispatchValidBuyCommand() {
+    void shouldForwardBuyArgumentsUninterpreted() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/buy NSE_EQ|INE848E01016 1500.50 10", listener);
 
-        assertEquals(List.of("buy:NSE_EQ|INE848E01016:1500.5:10"), listener.events);
+        assertEquals(List.of("buy:NSE_EQ|INE848E01016|1500.50|10"), listener.events);
     }
 
     /**
-     * Upstox index keys contain a space ("NSE_INDEX|Nifty 50"), so the
-     * instrument key is everything between /buy and the trailing
-     * price/quantity pair rather than a single token.
+     * Splitting instrument from price/quantity is the resolver's job, not
+     * the handler's: "NIFTY 50" is a two-token symbol while "ACC 25" is a
+     * symbol plus a quantity, and only the instrument master can tell them
+     * apart. The handler therefore forwards tokens verbatim.
      */
     @Test
-    void shouldDispatchBuyCommandForInstrumentKeyContainingSpaces() {
+    void shouldForwardMultiWordSymbolWithoutSplittingIt() {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy NSE_INDEX|Nifty 50 25000.75 50", listener);
+        TelegramCommandHandler.dispatch("/buy NIFTY 50", listener);
 
-        assertEquals(List.of("buy:NSE_INDEX|Nifty 50:25000.75:50"), listener.events);
+        assertEquals(List.of("buy:NIFTY|50"), listener.events);
     }
 
     @Test
-    void shouldCollapseExtraWhitespaceWithinMultiWordInstrumentKey() {
+    void shouldForwardBareSymbolWithNoPriceOrQuantity() {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy  NSE_INDEX|Nifty   50   25000  50 ", listener);
+        TelegramCommandHandler.dispatch("/buy NIFTY50", listener);
 
-        assertEquals(List.of("buy:NSE_INDEX|Nifty 50:25000.0:50"), listener.events);
+        assertEquals(List.of("buy:NIFTY50"), listener.events);
     }
 
     @Test
-    void shouldIgnoreMalformedBuyCommandWithWrongArgCount() {
+    void shouldIgnoreBuyCommandWithNoArguments() {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy NSE_EQ|INE848E01016 1500.50", listener);
-
-        assertTrue(listener.events.isEmpty());
-    }
-
-    @Test
-    void shouldIgnoreBuyCommandWithNonNumericPrice() {
-
-        RecordingListener listener = new RecordingListener();
-
-        TelegramCommandHandler.dispatch("/buy NSE_EQ|INE848E01016 abc 10", listener);
+        TelegramCommandHandler.dispatch("/buy", listener);
 
         assertTrue(listener.events.isEmpty());
     }
@@ -162,6 +153,6 @@ class TelegramCommandHandlerTest {
 
         TelegramCommandHandler.dispatch("  /buy   NSE_EQ|INE848E01016   1500   10  ", listener);
 
-        assertEquals(List.of("buy:NSE_EQ|INE848E01016:1500.0:10"), listener.events);
+        assertEquals(List.of("buy:NSE_EQ|INE848E01016|1500|10"), listener.events);
     }
 }

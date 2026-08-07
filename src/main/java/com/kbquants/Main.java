@@ -1,17 +1,25 @@
 package com.kbquants;
 
+import com.kbquants.instrument.InstrumentAwareBuyRequestResolver;
+import com.kbquants.instrument.InstrumentMasterLoader;
+import com.kbquants.instrument.InstrumentRegistry;
+import com.kbquants.instrument.PositionSizer;
 import com.kbquants.live.TradeMonitor;
 import com.kbquants.live.UpstoxDataCredentials;
 import com.kbquants.live.UpstoxMarketDataFeed;
+import com.kbquants.live.UpstoxQuoteService;
 import com.kbquants.notification.TelegramCommandHandler;
 import com.kbquants.notification.TelegramCredentials;
 import com.kbquants.notification.TelegramNotifier;
+import com.kbquants.session.BuyRequestResolver;
+import com.kbquants.session.LiteralBuyRequestResolver;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.NoOpOrderFillFeed;
 import com.kbquants.session.SimulatedMarketDataFeed;
 import com.kbquants.session.TradeFillEvent;
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.IOException;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -40,7 +48,7 @@ public class Main {
 
     private static final double PAPER_VOLATILITY_PERCENT = 0.3;
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws IOException {
 
         String tradingMode = System.getenv().getOrDefault("TRADING_MODE", "paper");
         if (!"paper".equalsIgnoreCase(tradingMode)) {
@@ -61,12 +69,23 @@ public class Main {
         TelegramCredentials credentials = TelegramCredentials.fromEnv();
         TelegramNotifier notifier = new TelegramNotifier(credentials);
 
-        // Resolved eagerly so a missing/blank Analytics Token fails at
-        // startup rather than on the first /buy, mid-trading-session.
-        Function<TradeFillEvent, MarketDataFeed> feedFactory =
-                liveData ? liveFeedFactory() : Main::simulatedFeed;
+        // Everything below is resolved eagerly so a missing Analytics Token,
+        // an unreachable instrument master or a bad CAPITAL_PER_TRADE fails
+        // at startup rather than on the first /buy, mid-trading-session.
+        Function<TradeFillEvent, MarketDataFeed> feedFactory;
+        BuyRequestResolver buyRequestResolver;
 
-        TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier);
+        if (liveData) {
+            UpstoxDataCredentials dataCredentials = UpstoxDataCredentials.fromEnv();
+            feedFactory = liveFeedFactory(dataCredentials);
+            buyRequestResolver = instrumentAwareResolver(dataCredentials);
+        } else {
+            feedFactory = Main::simulatedFeed;
+            buyRequestResolver = new LiteralBuyRequestResolver();
+        }
+
+        TradeMonitor tradeMonitor = new TradeMonitor(
+                new NoOpOrderFillFeed(), feedFactory, notifier, buyRequestResolver);
 
         TelegramCommandHandler commandHandler = new TelegramCommandHandler(credentials, tradeMonitor);
         commandHandler.start();
@@ -83,9 +102,28 @@ public class Main {
      * open trades ever outgrow Upstox's concurrent-connection allowance,
      * this becomes one shared streamer fanning out by instrument key.
      */
-    private static Function<TradeFillEvent, MarketDataFeed> liveFeedFactory() {
-        UpstoxDataCredentials dataCredentials = UpstoxDataCredentials.fromEnv();
+    private static Function<TradeFillEvent, MarketDataFeed> liveFeedFactory(UpstoxDataCredentials dataCredentials) {
         return fill -> new UpstoxMarketDataFeed(dataCredentials, Set.of(fill.getInstrumentKey()));
+    }
+
+    /**
+     * Symbol lookup plus price/quantity defaulting. Requires the instrument
+     * master (a ~2 MB download, cached daily) and CAPITAL_PER_TRADE, which
+     * is what a bare {@code /buy NIFTY50} sizes against.
+     */
+    private static BuyRequestResolver instrumentAwareResolver(UpstoxDataCredentials dataCredentials) throws IOException {
+
+        String capital = System.getenv("CAPITAL_PER_TRADE");
+        if (capital == null || capital.isBlank()) {
+            throw new IllegalStateException(
+                    "Missing required environment variable: CAPITAL_PER_TRADE (used to size a bare /buy <symbol>)");
+        }
+
+        InstrumentRegistry registry = new InstrumentMasterLoader().load();
+        return new InstrumentAwareBuyRequestResolver(
+                registry,
+                new UpstoxQuoteService(dataCredentials),
+                new PositionSizer(Double.parseDouble(capital)));
     }
 
     private static MarketDataFeed simulatedFeed(TradeFillEvent fill) {

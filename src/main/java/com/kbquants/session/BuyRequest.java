@@ -1,0 +1,43 @@
+package com.kbquants.session;
+
+import lombok.Getter;
+
+/**
+ * The outcome of turning raw /buy arguments into something tradable:
+ * either a fully resolved instrument key, entry price and quantity, or a
+ * rejection carrying a message fit to send straight back to the user.
+ * <p>
+ * Rejection is a value, not an exception, because every failure here is a
+ * normal user-facing outcome (unknown symbol, ambiguous symbol, capital
+ * below one lot) that must be reported rather than thrown.
+ */
+@Getter
+public final class BuyRequest {
+
+    private final boolean accepted;
+    private final String instrumentKey;
+    private final String displaySymbol;
+    private final double price;
+    private final int quantity;
+    private final String note;
+    private final String rejectionReason;
+
+    private BuyRequest(boolean accepted, String instrumentKey, String displaySymbol, double price,
+                       int quantity, String note, String rejectionReason) {
+        this.accepted = accepted;
+        this.instrumentKey = instrumentKey;
+        this.displaySymbol = displaySymbol;
+        this.price = price;
+        this.quantity = quantity;
+        this.note = note;
+        this.rejectionReason = rejectionReason;
+    }
+
+    public static BuyRequest accepted(String instrumentKey, String displaySymbol, double price, int quantity, String note) {
+        return new BuyRequest(true, instrumentKey, displaySymbol, price, quantity, note, null);
+    }
+
+    public static BuyRequest rejected(String reason) {
+        return new BuyRequest(false, null, null, 0, 0, null, reason);
+    }
+}

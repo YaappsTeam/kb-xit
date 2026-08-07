@@ -8,11 +8,14 @@ import com.kbquants.engine.ExitEngine;
 import com.kbquants.notification.Notifier;
 import com.kbquants.notification.ProfitMilestoneTracker;
 import com.kbquants.notification.TelegramCommandListener;
+import com.kbquants.session.BuyRequest;
+import com.kbquants.session.BuyRequestResolver;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.TradeFillEvent;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.OptionalDouble;
@@ -43,16 +46,19 @@ public class TradeMonitor implements TelegramCommandListener {
     private final Notifier notifier;
     private final Function<TradeFillEvent, MarketDataFeed> feedFactory;
     private final MilestoneLadder ladder;
+    private final BuyRequestResolver buyRequestResolver;
     private final Map<String, ActiveTrade> activeTrades = new ConcurrentHashMap<>();
 
-    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory, Notifier notifier) {
-        this(orderFillFeed, feedFactory, notifier, MilestoneLadder.defaultLadder());
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                        Notifier notifier, BuyRequestResolver buyRequestResolver) {
+        this(orderFillFeed, feedFactory, notifier, buyRequestResolver, MilestoneLadder.defaultLadder());
     }
 
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
-                         Notifier notifier, MilestoneLadder ladder) {
+                         Notifier notifier, BuyRequestResolver buyRequestResolver, MilestoneLadder ladder) {
         this.feedFactory = Objects.requireNonNull(feedFactory, "feedFactory must not be null");
         this.notifier = Objects.requireNonNull(notifier, "notifier must not be null");
+        this.buyRequestResolver = Objects.requireNonNull(buyRequestResolver, "buyRequestResolver must not be null");
         this.ladder = Objects.requireNonNull(ladder, "ladder must not be null");
         Objects.requireNonNull(orderFillFeed, "orderFillFeed must not be null").start(this::onFill);
     }
@@ -106,8 +112,23 @@ public class TradeMonitor implements TelegramCommandListener {
     }
 
     @Override
-    public void onBuy(String instrumentKey, double price, int quantity) {
-        onFill(new TradeFillEvent("telegram-" + UUID.randomUUID(), instrumentKey, price, quantity));
+    public void onBuy(List<String> args) {
+
+        BuyRequest request = buyRequestResolver.resolve(args);
+
+        if (!request.isAccepted()) {
+            log.info("Rejected /buy {}: {}", args, request.getRejectionReason());
+            notifier.send("Cannot buy: " + request.getRejectionReason());
+            return;
+        }
+
+        if (request.getNote() != null) {
+            notifier.send(String.format("%s @ %.2f x %d — %s",
+                    request.getDisplaySymbol(), request.getPrice(), request.getQuantity(), request.getNote()));
+        }
+
+        onFill(new TradeFillEvent("telegram-" + UUID.randomUUID(),
+                request.getInstrumentKey(), request.getPrice(), request.getQuantity()));
     }
 
     @Override
