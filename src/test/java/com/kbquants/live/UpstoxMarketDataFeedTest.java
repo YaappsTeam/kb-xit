@@ -19,35 +19,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>
  * The live WebSocket connection itself is not exercised here (that requires
  * real network access and Upstox credentials). These tests cover:
- * - Constructor validation (missing access token / empty instrument keys).
+ * - Constructor validation (empty instrument keys).
  * - The tick-mapping logic (dispatchUpdate) in isolation, using hand-built
  *   MarketUpdateV3 payloads instead of a real socket.
  */
 class UpstoxMarketDataFeedTest {
 
-    private static UpstoxCredentials credentialsWithToken() {
-        return new UpstoxCredentials("key", "secret", "https://example.com", "token", false);
-    }
-
-    private static UpstoxCredentials credentialsWithoutToken() {
-        return new UpstoxCredentials("key", "secret", "https://example.com", null, false);
-    }
-
-    @Test
-    void shouldThrowWhenAccessTokenIsMissing() {
-        assertThrows(IllegalStateException.class, () ->
-                new UpstoxMarketDataFeed(credentialsWithoutToken(), Set.of("NSE_EQ|INE848E01016")));
+    private static UpstoxDataCredentials credentials() {
+        return new UpstoxDataCredentials("analytics-token", false);
     }
 
     @Test
     void shouldThrowWhenInstrumentKeysIsEmpty() {
         assertThrows(IllegalArgumentException.class, () ->
-                new UpstoxMarketDataFeed(credentialsWithToken(), Set.of()));
+                new UpstoxMarketDataFeed(credentials(), Set.of()));
     }
 
     @Test
     void shouldConstructSuccessfullyWithValidInputs() {
-        new UpstoxMarketDataFeed(credentialsWithToken(), Set.of("NSE_EQ|INE848E01016"));
+        new UpstoxMarketDataFeed(credentials(), Set.of("NSE_EQ|INE848E01016"));
+    }
+
+    @Test
+    void shouldConstructForAnIndexInstrumentKey() {
+        new UpstoxMarketDataFeed(credentials(), Set.of("NSE_INDEX|Nifty 50"));
     }
 
     @Test

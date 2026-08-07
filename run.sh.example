@@ -11,7 +11,20 @@ export TELEGRAM_BOT_TOKEN="your-telegram-bot-token-here"
 export TELEGRAM_CHAT_ID="your-telegram-chat-id-here"
 # export TRADING_MODE="paper"   # optional -- "paper" is already the default
 
-JAR=$(find target -maxdepth 1 -name 'xit-mc-*.jar' ! -name 'original-*' | head -n 1)
+# Market data source: "simulated" (default) random-walks from your entry
+# price; "live" streams real ticks from Upstox. Live data needs an Upstox
+# Analytics Token -- generate one from the Developer Apps page (Analytics
+# tab). It is valid for a year, is read-only, and cannot place orders, so
+# no daily login is involved. Uncomment both lines to use live prices.
+# export MARKET_DATA="live"
+# export UPSTOX_ANALYTICS_TOKEN="your-upstox-analytics-token-here"
+
+# Newest by modification time, not first alphabetically: after a version
+# bump target/ can hold jars from several versions (plus the shade
+# plugin's -shaded copy), and picking alphabetically silently runs a
+# stale build.
+JAR=$(find target -maxdepth 1 -name 'xit-mc-*.jar' ! -name 'original-*' -printf '%T@ %p\n' \
+  | sort -rn | head -n 1 | cut -d' ' -f2-)
 
 if [ -z "$JAR" ]; then
   echo "No runnable jar found in target/. Run 'mvn package' first." >&2

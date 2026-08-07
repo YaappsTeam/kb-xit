@@ -9,6 +9,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -126,15 +127,22 @@ public class TelegramCommandHandler {
         }
     }
 
+    /**
+     * Parsed right-to-left rather than left-to-right: price and quantity are
+     * always the last two tokens, and everything between "/buy" and them is
+     * the instrument key. Some Upstox instrument keys contain spaces --
+     * notably the indices, e.g. "NSE_INDEX|Nifty 50" -- so a fixed
+     * four-token split would reject them as malformed.
+     */
     private static void dispatchBuy(String[] parts, String rawText, TelegramCommandListener listener) {
-        if (parts.length != 4) {
+        if (parts.length < 4) {
             log.warn("Malformed /buy command (expected /buy <instrument> <price> <qty>): {}", rawText);
             return;
         }
         try {
-            String instrumentKey = parts[1];
-            double price = Double.parseDouble(parts[2]);
-            int quantity = Integer.parseInt(parts[3]);
+            String instrumentKey = String.join(" ", Arrays.copyOfRange(parts, 1, parts.length - 2));
+            double price = Double.parseDouble(parts[parts.length - 2]);
+            int quantity = Integer.parseInt(parts[parts.length - 1]);
             listener.onBuy(instrumentKey, price, quantity);
         } catch (NumberFormatException e) {
             log.warn("Malformed /buy command (invalid price/qty): {}", rawText);

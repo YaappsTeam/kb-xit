@@ -6,11 +6,18 @@ import java.util.Objects;
 import java.util.function.Function;
 
 /**
- * Credentials/config needed to talk to the Upstox API.
+ * Credentials for Upstox's <b>trading</b> APIs -- anything that places or
+ * modifies an order.
  * <p>
  * accessToken is the short-lived, daily-expiring token obtained via the
  * OAuth authorization-code flow (see UpstoxAuthService) -- it is not
- * present until that flow has been completed for the current trading day.
+ * present until that flow has been completed for the current trading day,
+ * and it expires at 3:30 AM the next day.
+ * <p>
+ * Market data does <b>not</b> use this class: streaming prices is
+ * authenticated with the year-long Analytics Token instead, modelled by
+ * {@link UpstoxDataCredentials}. Keeping the two separate is what lets
+ * live-data mode run with no daily login and no order permissions.
  */
 @Getter
 public final class UpstoxCredentials {

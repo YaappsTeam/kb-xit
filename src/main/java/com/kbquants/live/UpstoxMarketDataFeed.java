@@ -16,8 +16,10 @@ import java.util.Set;
 /**
  * Live MarketDataFeed backed by Upstox's V3 WebSocket market data streamer.
  * <p>
- * Requires a valid (same-day) access token in the supplied UpstoxCredentials --
- * obtain one via {@link UpstoxAuthService}'s authorization-code flow first.
+ * Authenticated with an Analytics Token ({@link UpstoxDataCredentials}),
+ * which is valid for a year and covers the streaming API without a static
+ * IP -- so live prices need no daily login. The daily
+ * {@link UpstoxAuthService} flow is only needed for order placement.
  * <p>
  * {@link #start(PriceListener)} is asynchronous: it opens the WebSocket
  * connection and returns immediately. Prices arrive on the streamer's
@@ -27,18 +29,14 @@ import java.util.Set;
 @Slf4j
 public class UpstoxMarketDataFeed implements MarketDataFeed {
 
-    private final UpstoxCredentials credentials;
+    private final UpstoxDataCredentials credentials;
     private final Set<String> instrumentKeys;
     private MarketDataStreamerV3 streamer;
 
-    public UpstoxMarketDataFeed(UpstoxCredentials credentials, Set<String> instrumentKeys) {
+    public UpstoxMarketDataFeed(UpstoxDataCredentials credentials, Set<String> instrumentKeys) {
         this.credentials = Objects.requireNonNull(credentials, "credentials must not be null");
         this.instrumentKeys = Objects.requireNonNull(instrumentKeys, "instrumentKeys must not be null");
 
-        if (!credentials.hasAccessToken()) {
-            throw new IllegalStateException(
-                    "UpstoxCredentials has no access token; complete the UpstoxAuthService login flow first");
-        }
         if (instrumentKeys.isEmpty()) {
             throw new IllegalArgumentException("instrumentKeys must not be empty");
         }
@@ -49,7 +47,7 @@ public class UpstoxMarketDataFeed implements MarketDataFeed {
         Objects.requireNonNull(listener, "listener must not be null");
 
         ApiClient apiClient = new ApiClient(credentials.isSandbox());
-        apiClient.setAccessToken(credentials.getAccessToken());
+        apiClient.setAccessToken(credentials.getAnalyticsToken());
         Configuration.setDefaultApiClient(apiClient);
 
         streamer = new MarketDataStreamerV3(apiClient, instrumentKeys, Mode.LTPC);
