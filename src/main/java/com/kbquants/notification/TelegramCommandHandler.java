@@ -44,8 +44,13 @@ public class TelegramCommandHandler {
 
     public void start() {
         running = true;
+        // Deliberately NOT a daemon thread: this is the one thread whose
+        // liveness defines whether the whole application is still supposed
+        // to be running. If it were a daemon thread, the JVM would exit the
+        // instant main() returns (no other non-daemon thread keeps it
+        // alive), killing the process before it ever actually polls
+        // Telegram. stop() below is what lets it shut down cleanly instead.
         pollingThread = new Thread(this::pollLoop, "telegram-command-poller");
-        pollingThread.setDaemon(true);
         pollingThread.start();
         log.info("Telegram command handler started");
     }

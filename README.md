@@ -15,6 +15,13 @@ Right now the runnable mode is **paper trading**: you invoke a trade via a Teleg
 ```bash
 git clone https://github.com/YaappsTeam/kb-xit.git
 cd kb-xit
+```
+
+Pick the path for your shell:
+
+**macOS / Linux / Git Bash — `run.sh`:**
+
+```bash
 cp run.sh.example run.sh
 ```
 
@@ -25,14 +32,38 @@ export TELEGRAM_BOT_TOKEN="your-telegram-bot-token-here"
 export TELEGRAM_CHAT_ID="your-telegram-chat-id-here"
 ```
 
-`run.sh` is already gitignored — your token never risks being committed. Never edit `run.sh.example` with real values; that file *is* tracked.
-
 Build and run:
 
 ```bash
 mvn package
 ./run.sh
 ```
+
+**Windows PowerShell — `run.ps1`:**
+
+Bash scripts don't run in PowerShell, and double-clicking `run.sh` in Explorer/IntelliJ just opens Windows' "pick an app" dialog — it never executes it. Use the PowerShell equivalent instead:
+
+```powershell
+Copy-Item run.ps1.example run.ps1
+```
+
+Edit `run.ps1` and fill in your real values:
+
+```powershell
+$env:TELEGRAM_BOT_TOKEN = "your-telegram-bot-token-here"
+$env:TELEGRAM_CHAT_ID = "your-telegram-chat-id-here"
+```
+
+Build and run:
+
+```powershell
+mvn package
+./run.ps1
+```
+
+---
+
+Either way, `run.sh` / `run.ps1` are already gitignored — your token never risks being committed. Never edit `run.sh.example` / `run.ps1.example` with real values; those files *are* tracked.
 
 You should see:
 
@@ -85,6 +116,7 @@ mvn test -Dtest=PhaseManagerTest   # a single test class
 - **`TRADING_MODE=... is not supported yet`** — only `paper` is wired up right now; leave `TRADING_MODE` unset (it defaults to `paper`) or set it explicitly to `paper`.
 - **No jar found / `run.sh` fails immediately** — run `mvn package` first; `run.sh` looks for `target/xit-mc-*.jar`.
 - **Bot doesn't reply to `/buy`** — confirm you've messaged the bot at least once already (step 2 above) and that `TELEGRAM_CHAT_ID` is your own numeric id, not the bot's.
+- **On Windows, double-clicking `run.sh` prompts "Select an app to open this file"** — expected; Windows has no concept of a bash shebang line, so opening `run.sh` this way never actually runs it, no matter what app you pick. Use `run.ps1` in PowerShell instead (see Quick start above), or run `run.sh` from Git Bash if you have Git for Windows installed.
 
 ## Project documentation
 

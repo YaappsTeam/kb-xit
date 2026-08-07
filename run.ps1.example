@@ -1,0 +1,24 @@
+# Copy this file to run.ps1 (already gitignored) and fill in your real
+# credentials there. Never commit run.ps1 -- it will contain your live
+# Telegram bot token. See CODING_STANDARDS.md section 7 for why
+# credentials are always read from the environment, never baked into
+# the build.
+#
+# Windows equivalent of run.sh.example -- use this instead if your
+# terminal is PowerShell (bash scripts won't run there; see README.md
+# Troubleshooting for why double-clicking run.sh doesn't work either).
+
+$ErrorActionPreference = "Stop"
+
+$env:TELEGRAM_BOT_TOKEN = "your-telegram-bot-token-here"
+$env:TELEGRAM_CHAT_ID = "your-telegram-chat-id-here"
+# $env:TRADING_MODE = "paper"   # optional -- "paper" is already the default
+
+$jar = Get-ChildItem target -Filter "xit-mc-*.jar" | Where-Object { $_.Name -notlike "original-*" } | Select-Object -First 1
+
+if (-not $jar) {
+    Write-Error "No runnable jar found in target/. Run 'mvn package' first."
+    exit 1
+}
+
+java -jar $jar.FullName
