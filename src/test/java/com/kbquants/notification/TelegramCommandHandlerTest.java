@@ -62,6 +62,11 @@ class TelegramCommandHandlerTest {
         public void onMonitorModeRequested(String target, com.kbquants.domain.MonitorMode mode) {
             events.add("mode:" + mode + ":" + target);
         }
+
+        @Override
+        public void onUnknownCommand(String command) {
+            events.add("unknown:" + command);
+        }
     }
 
     @Test
@@ -111,18 +116,18 @@ class TelegramCommandHandlerTest {
     }
 
     /**
-     * /buy was renamed to /track, but the old name still works: it is typed
-     * under time pressure, and an unrecognised command would silently do
-     * nothing while the user believed a trade was being watched.
+     * /buy no longer exists. It must be reported rather than ignored --
+     * silence would leave the user believing a position was being watched
+     * when nothing was dispatched.
      */
     @Test
-    void legacyBuyCommandShouldStillDispatchAsTrack() {
+    void removedBuyCommandShouldBeReportedAsUnknown() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/buy NIFTY50", listener);
 
-        assertEquals(List.of("track:NIFTY50"), listener.events);
+        assertEquals(List.of("unknown:/buy"), listener.events);
     }
 
     @Test
@@ -253,11 +258,26 @@ class TelegramCommandHandlerTest {
     }
 
     @Test
-    void shouldIgnoreUnrecognizedCommand() {
+    void shouldReportUnrecognizedCommand() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/help", listener);
+
+        assertEquals(List.of("unknown:/help"), listener.events);
+    }
+
+    /**
+     * Only command-shaped input is answered, so the bot stays quiet in
+     * ordinary conversation rather than replying to every message.
+     */
+    @Test
+    void shouldStaySilentOnPlainChatMessages() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("hello", listener);
+        TelegramCommandHandler.dispatch("nifty looking strong today", listener);
 
         assertTrue(listener.events.isEmpty());
     }

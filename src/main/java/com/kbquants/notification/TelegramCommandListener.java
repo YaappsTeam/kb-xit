@@ -44,4 +44,11 @@ public interface TelegramCommandListener {
      * @param target  an orderId, or "all"
      */
     void onMonitorModeRequested(String target, com.kbquants.domain.MonitorMode mode);
+
+    /**
+     * Something command-shaped that matched nothing. Answered rather than
+     * ignored, so a typo cannot leave the user believing a trade is being
+     * watched when no command was dispatched.
+     */
+    void onUnknownCommand(String command);
 }

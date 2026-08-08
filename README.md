@@ -299,7 +299,7 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 
 | Command | Effect |
 |---|---|
-| `/track <symbol>` | Start managing the exit of a position you already hold, at LTP, sized from `CAPITAL_PER_TRADE` (live mode). `/buy` still works as a legacy alias |
+| `/track <symbol>` | Start managing the exit of a position you already hold, at LTP, sized from `CAPITAL_PER_TRADE` (live mode) |
 | `/track <symbol> <qty>` | As above with an explicit quantity |
 | `/track <symbol> <price> <qty>` | Fully explicit; the only form available in simulated mode |
 | `/exit <orderId>` | Force-exit that trade |
@@ -313,10 +313,12 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 | `/ladder` | Show the milestone sets as buttons and pick one |
 | `/ladder <name>` | Select a set directly, skipping the buttons |
 
+Anything else starting with `/` gets an "unknown command" reply listing what's available. That's deliberate: a mistyped command that silently did nothing would leave you believing a position was being watched when it wasn't. Ordinary chat is ignored, so the bot only answers command-shaped input.
+
 ## Running tests
 
 ```bash
-mvn test              # full suite (244 tests)
+mvn test              # full suite (245 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 

@@ -157,10 +157,6 @@ public class TelegramCommandHandler {
 
         switch (parts[0]) {
             case "/track" -> dispatchTrack(parts, text, listener);
-            // Kept working rather than removed: this is typed under time
-            // pressure, and an unrecognised command would silently do
-            // nothing while the user believed a trade was being watched.
-            case "/buy" -> dispatchTrack(parts, text, listener);
             case "/exit" -> dispatchExit(parts, text, listener);
             case "/status" -> listener.onStatusRequested();
             case "/refresh" -> listener.onRefreshInstruments();
@@ -170,7 +166,7 @@ public class TelegramCommandHandler {
             case "/release" -> dispatchMode(parts, rawText(text), MonitorMode.RELEASED, listener);
             case "/observe" -> dispatchMode(parts, rawText(text), MonitorMode.OBSERVED, listener);
             case "/manage" -> dispatchMode(parts, rawText(text), MonitorMode.MANAGED, listener);
-            default -> log.debug("Ignoring unrecognized command: {}", text);
+            default -> dispatchUnknown(parts[0], listener);
         }
     }
 
@@ -204,6 +200,25 @@ public class TelegramCommandHandler {
 
     private static String rawText(String text) {
         return text;
+    }
+
+    /**
+     * Anything starting with "/" was meant as a command, so a
+     * typo -- or a name that no longer exists -- gets answered rather than
+     * silently dropped. Staying quiet is the dangerous option here: the
+     * user would believe a position was being watched when nothing had
+     * been dispatched.
+     * <p>
+     * Ordinary chat is left alone; only command-shaped input is answered,
+     * so the bot does not respond to every message in the thread.
+     */
+    private static void dispatchUnknown(String command, TelegramCommandListener listener) {
+        if (!command.startsWith("/")) {
+            log.debug("Ignoring non-command message: {}", command);
+            return;
+        }
+        log.warn("Unrecognized command: {}", command);
+        listener.onUnknownCommand(command);
     }
 
     /**
