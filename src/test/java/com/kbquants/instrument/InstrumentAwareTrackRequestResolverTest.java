@@ -1,6 +1,6 @@
 package com.kbquants.instrument;
 
-import com.kbquants.session.BuyRequest;
+import com.kbquants.session.TrackRequest;
 import com.kbquants.session.QuoteService;
 import org.junit.jupiter.api.Test;
 
@@ -13,10 +13,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Unit tests for InstrumentAwareBuyRequestResolver, using a stubbed quote
+ * Unit tests for InstrumentAwareTrackRequestResolver, using a stubbed quote
  * service so no network call is made.
  */
-class InstrumentAwareBuyRequestResolverTest {
+class InstrumentAwareTrackRequestResolverTest {
 
     private static final Instrument ACC =
             new Instrument("ACC", "NSE_EQ|INE012A01025", "NSE_EQ", "EQ", "ACC LIMITED", 1, 0, 0.10);
@@ -30,17 +30,17 @@ class InstrumentAwareBuyRequestResolverTest {
     private static final Instrument CHOLA_B =
             new Instrument("CHOLAFIN", "NSE_EQ|INE222", "NSE_EQ", "EQ", "Cholamandalam B", 1, 0, 0.05);
 
-    private static InstrumentAwareBuyRequestResolver resolver(Map<String, Double> prices, double capital) {
+    private static InstrumentAwareTrackRequestResolver resolver(Map<String, Double> prices, double capital) {
         QuoteService quotes = key -> prices.containsKey(key)
                 ? OptionalDouble.of(prices.get(key))
                 : OptionalDouble.empty();
-        return new InstrumentAwareBuyRequestResolver(
+        return new InstrumentAwareTrackRequestResolver(
                 new InstrumentRegistry(List.of(ACC, NIFTY, NIFTY_CE, CHOLA_A, CHOLA_B)),
                 quotes,
                 new PositionSizer(capital));
     }
 
-    private static InstrumentAwareBuyRequestResolver defaultResolver() {
+    private static InstrumentAwareTrackRequestResolver defaultResolver() {
         return resolver(Map.of(
                 "NSE_EQ|INE012A01025", 1850.50,
                 "NSE_INDEX|Nifty 50", 24570.65,
@@ -50,7 +50,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldResolveBareSymbolWithDefaultedPriceAndQuantity() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("ACC"));
+        TrackRequest request = defaultResolver().resolve(List.of("ACC"));
 
         assertTrue(request.isAccepted());
         assertEquals("NSE_EQ|INE012A01025", request.getInstrumentKey());
@@ -61,7 +61,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldResolveSymbolWithExplicitQuantityOnly() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("ACC", "25"));
+        TrackRequest request = defaultResolver().resolve(List.of("ACC", "25"));
 
         assertTrue(request.isAccepted());
         assertEquals(1850.50, request.getPrice());
@@ -71,7 +71,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldResolveSymbolWithExplicitPriceAndQuantity() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("ACC", "1800", "10"));
+        TrackRequest request = defaultResolver().resolve(List.of("ACC", "1800", "10"));
 
         assertTrue(request.isAccepted());
         assertEquals(1800.0, request.getPrice());
@@ -86,7 +86,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldPreferLongerSymbolMatchOverTrailingQuantity() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("NIFTY", "25000", "CE", "18", "AUG", "26"));
+        TrackRequest request = defaultResolver().resolve(List.of("NIFTY", "25000", "CE", "18", "AUG", "26"));
 
         assertTrue(request.isAccepted());
         assertEquals("NSE_FO|45148", request.getInstrumentKey());
@@ -96,7 +96,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldStillAllowQuantityAfterAMultiTokenSymbol() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("NIFTY", "25000", "CE", "18", "AUG", "26", "130"));
+        TrackRequest request = defaultResolver().resolve(List.of("NIFTY", "25000", "CE", "18", "AUG", "26", "130"));
 
         assertTrue(request.isAccepted());
         assertEquals("NSE_FO|45148", request.getInstrumentKey());
@@ -110,7 +110,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldResolveIndexBySpacelessAliasFromItsKey() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("NIFTY50"));
+        TrackRequest request = defaultResolver().resolve(List.of("NIFTY50"));
 
         assertFalse(request.isAccepted());
         assertTrue(request.getRejectionReason().contains("is an index"));
@@ -123,7 +123,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldRejectBuyingAnIndex() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("NIFTY", "50"));
+        TrackRequest request = defaultResolver().resolve(List.of("NIFTY", "50"));
 
         assertFalse(request.isAccepted());
         assertTrue(request.getRejectionReason().contains("cannot be bought"));
@@ -132,7 +132,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldSizeOptionsInWholeLots() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("nifty25000ce18aug26"));
+        TrackRequest request = defaultResolver().resolve(List.of("nifty25000ce18aug26"));
 
         assertTrue(request.isAccepted());
         assertEquals(325, request.getQuantity());
@@ -142,7 +142,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldCapOptionQuantityAtFreezeLimitAndSaySo() {
 
-        BuyRequest request = resolver(Map.of("NSE_FO|45148", 150.0), 10_000_000)
+        TrackRequest request = resolver(Map.of("NSE_FO|45148", 150.0), 10_000_000)
                 .resolve(List.of("nifty25000ce18aug26"));
 
         assertTrue(request.isAccepted());
@@ -153,7 +153,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldRejectWhenCapitalCannotCoverOneLot() {
 
-        BuyRequest request = resolver(Map.of("NSE_FO|45148", 900.0), 10_000)
+        TrackRequest request = resolver(Map.of("NSE_FO|45148", 900.0), 10_000)
                 .resolve(List.of("nifty25000ce18aug26"));
 
         assertFalse(request.isAccepted());
@@ -163,7 +163,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldRejectUnknownSymbol() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("NOSUCHTHING"));
+        TrackRequest request = defaultResolver().resolve(List.of("NOSUCHTHING"));
 
         assertFalse(request.isAccepted());
         assertTrue(request.getRejectionReason().contains("unknown instrument"));
@@ -172,7 +172,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldRejectAmbiguousSymbolAndListCandidates() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("CHOLAFIN"));
+        TrackRequest request = defaultResolver().resolve(List.of("CHOLAFIN"));
 
         assertFalse(request.isAccepted());
         assertTrue(request.getRejectionReason().contains("ambiguous"));
@@ -187,7 +187,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldRejectWhenLastTradedPriceIsUnavailable() {
 
-        BuyRequest request = resolver(Map.of(), 50_000).resolve(List.of("ACC"));
+        TrackRequest request = resolver(Map.of(), 50_000).resolve(List.of("ACC"));
 
         assertFalse(request.isAccepted());
         assertTrue(request.getRejectionReason().contains("could not fetch last traded price"));
@@ -196,7 +196,7 @@ class InstrumentAwareBuyRequestResolverTest {
     @Test
     void shouldStillAcceptRawInstrumentKey() {
 
-        BuyRequest request = defaultResolver().resolve(List.of("NSE_EQ|INE012A01025", "1800", "10"));
+        TrackRequest request = defaultResolver().resolve(List.of("NSE_EQ|INE012A01025", "1800", "10"));
 
         assertTrue(request.isAccepted());
         assertEquals(10, request.getQuantity());

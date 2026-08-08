@@ -70,13 +70,13 @@ Either way, `run.sh` / `run.ps1` are already gitignored — your token never ris
 You should see:
 
 ```
-xit-mc started in PAPER trading mode. Send /buy <instrument> <price> <qty> to Telegram to begin.
+xit-mc started in PAPER trading mode. Send /track <symbol> to Telegram to begin.
 ```
 
 Now message your bot on Telegram:
 
 ```
-/buy NSE_EQ|INE848E01016 1500 10
+/track NSE_EQ|INE848E01016 1500 10
 ```
 
 A simulated price feed starts at ₹1500 and random-walks from there. You will first be told when the trade clears breakeven (brokerage and taxes covered), then as it crosses each net profit milestone (1%, 2%, 3%, 5%, 8%, 13%, 21%, 34%, 55%); if it drops to the stop-loss, the trade auto-closes and you're notified. Send `/status` anytime to see open trades, or `/exit <orderId>` / `/exit all` to close manually.
@@ -110,19 +110,19 @@ export MARKET_DATA="live"
 export UPSTOX_ANALYTICS_TOKEN="your-upstox-analytics-token-here"
 ```
 
-You should see `... started in PAPER trading mode with LIVE Upstox market data`. Live mode also needs `CAPITAL_PER_TRADE` — see the next section, which covers how `/buy` is used from here on.
+You should see `... started in PAPER trading mode with LIVE Upstox market data`. Live mode also needs `CAPITAL_PER_TRADE` — see the next section, which covers how `/track` is used from here on.
 
 Ticks only arrive while the market is open, so outside market hours the engine sits idle rather than reporting an error.
 
 ## Symbols, prices and lot sizing (live mode)
 
-Typing `NSE_FO|45148` while scalping is not realistic, so in live mode `/buy` takes a **trading symbol** and fills in the rest:
+Typing `NSE_FO|45148` while scalping is not realistic, so in live mode `/track` takes a **trading symbol** and fills in the rest:
 
 ```
-/buy nifty25000ce18aug26        price = LTP, quantity = capital ÷ lot cost
-/buy ACC 25                     quantity 25, price = LTP
-/buy ACC 1850.5 25              both explicit
-/buy NSE_EQ|INE012A01025 …      raw instrument key still works
+/track nifty25000ce18aug26        price = LTP, quantity = capital ÷ lot cost
+/track ACC 25                     quantity 25, price = LTP
+/track ACC 1850.5 25              both explicit
+/track NSE_EQ|INE012A01025 …      raw instrument key still works
 ```
 
 Matching ignores case and spaces, so `NIFTY 25000 CE 18 AUG 26` and `nifty25000ce18aug26` are the same instrument, and `NIFTY50` finds the index. Symbols are looked up in a local copy of Upstox's instrument master (~2 MB, ~43k instruments, cached in `~/.xit-mc/instruments`) — a map lookup, not an API call, so it costs nothing in the hot path. With exactly one trailing number it is read as a **quantity**, never a price.
@@ -135,7 +135,7 @@ lots = floor(CAPITAL_PER_TRADE / (ltp × lotSize))     capped at floor(freezeQty
 
 Equities have `lotSize = 1`, so the same formula gives plain capital ÷ price. Worked examples at `CAPITAL_PER_TRADE=50000`:
 
-| `/buy` | LTP | Lot | Result |
+| Command | LTP | Lot | Result |
 |---|---|---|---|
 | `ACC` | 1,362.80 | 1 | 36 → ₹49,061 |
 | `nifty25000ce18aug26` | 55.30 | 65 | 13 lots = 845 → ₹46,729 |
@@ -144,13 +144,13 @@ Equities have `lotSize = 1`, so the same formula gives plain capital ÷ price. W
 Two deliberate behaviours:
 
 - **Capped, not sliced.** Exchanges reject single orders above a freeze quantity (1,755 for NIFTY, i.e. 27 lots). When your capital would buy more — routine on expiry days — the order is capped at that limit rather than split into several. Slicing is a planned enhancement; multiple fills at different prices don't fit the engine's single-entry-price model yet.
-- **Refused, not zero-sized.** If capital won't cover even one lot, `/buy` reports why instead of opening a zero-quantity trade.
+- **Refused, not zero-sized.** If capital won't cover even one lot, `/track` reports why instead of opening a zero-quantity trade.
 
-Indices are streamable but **cannot be bought** — `/buy NIFTY50` is refused, since a position exists only in the corresponding option or future.
+Indices are streamable but **cannot be bought** — `/track NIFTY50` is refused, since a position exists only in the corresponding option or future.
 
-A handful of trading symbols are ambiguous (`CHOLAFIN`, `MOTHERSON`, `ELECTCAST`, `IMC1`, `SILVER`). Rather than guess, `/buy` lists the candidates and asks for the full instrument key.
+A handful of trading symbols are ambiguous (`CHOLAFIN`, `MOTHERSON`, `ELECTCAST`, `IMC1`, `SILVER`). Rather than guess, `/track` lists the candidates and asks for the full instrument key.
 
-In simulated mode there is no instrument master and no price source, so `/buy` still requires `<instrumentKey> <price> <qty>` in full.
+In simulated mode there is no instrument master and no price source, so `/track` still requires `<instrumentKey> <price> <qty>` in full.
 
 ### Instrument master refresh
 
@@ -168,7 +168,7 @@ That forces a download regardless of schedule and takes effect on the next comma
 
 The primary goal is capital preservation, so **every percentage is net of costs**. A trade's breakeven is not its entry price — it's the price at which brokerage, STT, exchange transaction charges, GST and stamp duty are all covered.
 
-Costs come from Upstox's own brokerage calculator (reachable with the Analytics Token, no static IP), one call per side at `/buy`. Real quotes:
+Costs come from Upstox's own brokerage calculator (reachable with the Analytics Token, no static IP), one call per side at `/track`. Real quotes:
 
 | Position | Invested | Round trip | % of invested |
 |---|---|---|---|
@@ -228,7 +228,7 @@ All NIFTY option contracts have lot 65, freeze 1,755 and a ₹0.05 tick — so *
 2. **One tick becomes a large percentage**, so breakeven has to be **rounded up to a tradable price**. At ₹1 the computed breakeven is ₹1.0293, which nobody can sell at; the real one is ₹1.05, making breakeven +5% rather than +2.93%.
 3. **Costs stop being a rounding error** — 2.93% of deployed at ₹1, 5.62% at ₹0.50.
 
-`/buy` warns rather than refuses in each case: on expiry day a cheap lottery ticket may be exactly what you intend, but you'll be told when the freeze cap is binding, when costs exceed 2% of deployed, and when one tick is coarser than the first ladder rung (which makes the early milestones fire together).
+`/track` warns rather than refuses in each case: on expiry day a cheap lottery ticket may be exactly what you intend, but you'll be told when the freeze cap is binding, when costs exceed 2% of deployed, and when one tick is coarser than the first ladder rung (which makes the early milestones fire together).
 
 ## Milestone sets
 
@@ -258,7 +258,7 @@ Selection rules:
 
 ## Taking back control
 
-This app **never places a buy order**. It's purely an exit engine: every position it manages was bought elsewhere and handed to it by `/buy`. So it has to be possible to hand one back.
+This app **never places a buy order**. It's purely an exit engine: every position it manages was bought elsewhere and handed to it by `/track`. So it has to be possible to hand one back.
 
 `/exit` sells. These don't:
 
@@ -282,7 +282,7 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 3. Search for **`@userinfobot`**, tap **Start** — it replies with your numeric `Id:`. That's `TELEGRAM_CHAT_ID`.
 4. (Optional) Back in BotFather, send `/setcommands`, pick your bot, and paste:
    ```
-   buy - Invoke a trade: /buy <instrument> <price> <qty>
+   track - Manage a position you hold: /track <symbol> [price] [qty]
    exit - Force-exit a trade: /exit <orderId> or /exit all
    status - List active trades
    refresh - Re-fetch the instrument master now
@@ -299,9 +299,9 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 
 | Command | Effect |
 |---|---|
-| `/buy <symbol>` | Invoke a new (paper) trade at LTP, sized from `CAPITAL_PER_TRADE` (live mode) |
-| `/buy <symbol> <qty>` | As above with an explicit quantity |
-| `/buy <symbol> <price> <qty>` | Fully explicit; the only form available in simulated mode |
+| `/track <symbol>` | Start managing the exit of a position you already hold, at LTP, sized from `CAPITAL_PER_TRADE` (live mode). `/buy` still works as a legacy alias |
+| `/track <symbol> <qty>` | As above with an explicit quantity |
+| `/track <symbol> <price> <qty>` | Fully explicit; the only form available in simulated mode |
 | `/exit <orderId>` | Force-exit that trade |
 | `/exit all` | Force-exit every open trade |
 | `/status` | Report all open trades: instrument, entry, current price, phase, stop-loss |
@@ -316,7 +316,7 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 ## Running tests
 
 ```bash
-mvn test              # full suite (243 tests)
+mvn test              # full suite (244 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 
@@ -324,15 +324,15 @@ mvn test -Dtest=PhaseManagerTest   # a single test class
 
 - **`Missing required environment variable: TELEGRAM_BOT_TOKEN`** — you're running `java -jar` directly (not `./run.sh`) without the env vars set in that shell, or `run.sh` still has placeholder values.
 - **`TRADING_MODE=... is not supported yet`** — only `paper` is wired up right now; leave `TRADING_MODE` unset (it defaults to `paper`) or set it explicitly to `paper`. Note this is about *order execution*, and is separate from `MARKET_DATA` — live prices work fine in paper mode.
-- **`Missing required environment variable: UPSTOX_ANALYTICS_TOKEN`** — you set `MARKET_DATA=live` without a token. This is checked at startup rather than on your first `/buy`, so it fails immediately instead of mid-session.
+- **`Missing required environment variable: UPSTOX_ANALYTICS_TOKEN`** — you set `MARKET_DATA=live` without a token. This is checked at startup rather than on your first `/track`, so it fails immediately instead of mid-session.
 - **`MARKET_DATA=... is not recognised`** — expected `simulated` (default) or `live`.
-- **`Missing required environment variable: CAPITAL_PER_TRADE`** — live mode needs it to size a bare `/buy <symbol>`. Set it in `run.ps1` / `run.sh`.
+- **`Missing required environment variable: CAPITAL_PER_TRADE`** — live mode needs it to size a bare `/track <symbol>`. Set it in `run.ps1` / `run.sh`.
 - **`unknown instrument: X`** — the symbol isn't in the master. Check spelling against the trading symbol Upstox uses; option symbols look like `NIFTY 25000 CE 18 AUG 26` (spaces optional).
 - **`X is an index and cannot be bought`** — expected; trade the option or future instead.
 - **`one lot of X costs … which exceeds capital per trade`** — raise `CAPITAL_PER_TRADE`, or pass an explicit quantity to override sizing entirely.
 - **Live mode connects but no ticks arrive** — the market is likely closed, or the instrument key is wrong. Check the key against Upstox's instrument list; the index is `NSE_INDEX|Nifty 50`, not `NIFTY50`.
 - **No jar found / `run.sh` fails immediately** — run `mvn package` first; `run.sh` looks for `target/xit-mc-*.jar`.
-- **Bot doesn't reply to `/buy`** — confirm you've messaged the bot at least once already (step 2 above) and that `TELEGRAM_CHAT_ID` is your own numeric id, not the bot's.
+- **Bot doesn't reply to `/track`** — confirm you've messaged the bot at least once already (step 2 above) and that `TELEGRAM_CHAT_ID` is your own numeric id, not the bot's.
 - **On Windows, double-clicking `run.sh` prompts "Select an app to open this file"** — expected; Windows has no concept of a bash shebang line, so opening `run.sh` this way never actually runs it, no matter what app you pick. Use `run.ps1` in PowerShell instead (see Quick start above), or run `run.sh` from Git Bash if you have Git for Windows installed.
 
 ## Project documentation

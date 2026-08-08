@@ -8,12 +8,12 @@ package com.kbquants.notification;
 public interface TelegramCommandListener {
 
     /**
-     * Raw whitespace-separated arguments following "/buy", left
+     * Raw whitespace-separated arguments following "/track", left
      * uninterpreted on purpose: whether a trailing number is a quantity or
      * part of a multi-word symbol can only be decided against the
      * instrument master, which lives well below this interface.
      */
-    void onBuy(java.util.List<String> args);
+    void onTrack(java.util.List<String> args);
 
     void onExit(String orderId);
     void onExitAll();

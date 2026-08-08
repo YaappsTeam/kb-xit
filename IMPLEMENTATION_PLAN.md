@@ -17,7 +17,7 @@ Built since, all on the read-only Analytics Token (no daily login, no static IP)
 | | |
 |---|---|
 | **Live market data** | `MARKET_DATA=live` streams real ticks into the exit engine while trades stay on paper |
-| **Symbol resolution** | `/buy nifty25000ce18aug26` — instrument master cached weekly, case- and space-insensitive, local map lookup |
+| **Symbol resolution** | `/track nifty25000ce18aug26` — instrument master cached weekly, case- and space-insensitive, local map lookup |
 | **Sizing** | Whole lots, capped at the exchange freeze limit, from `CAPITAL_PER_TRADE` and optionally `MAX_RISK_PER_TRADE` |
 | **Net-of-cost thresholds** | `basePrice` is the cost-inclusive breakeven; charges come from Upstox's brokerage API and are settled at the real exit price |
 | **Named milestone sets** | EQUITY and OPTIONS, selectable at runtime via `/ladder`, each carrying its own hard stop |
@@ -25,7 +25,7 @@ Built since, all on the read-only Analytics Token (no daily login, no static IP)
 
 **Remaining gaps going into Phase 3:**
 
-- The order side is not wired into `Main` — `UpstoxOrderFillFeed` is unused there, so trades arrive only via `/buy`
+- The order side is not wired into `Main` — `UpstoxOrderFillFeed` is unused there, so trades arrive only via `/track`
 - No real exit order placement; `forceExit` marks the trade closed without touching the broker
 - No position reconciliation on startup
 - **Adoption becomes opt-out the moment the fill feed is wired**, since it streams fills for the whole account. An explicit adopt step is worth building alongside it; `/pause` is the interim guard
@@ -116,7 +116,7 @@ Telegram is currently one-way (outbound notifications). Make it two-way: the use
 
 | Command | Action |
 |---|---|
-| `/buy <instrument> <price> <qty>` | Create a `TradeFillEvent` and start monitoring |
+| `/track <instrument> <price> <qty>` | Create a `TradeFillEvent` and start monitoring |
 | `/exit <orderId>` | Force exit that trade |
 | `/exit all` | Force exit all active trades |
 | `/status` | List active trades with current price, phase, milestone, and stop-loss |
@@ -147,7 +147,7 @@ A simulated price feed for paper trading. Unlike `DeterministicSimulationFeed` (
 | Parameters | Starting price, volatility, tick interval |
 | Purpose | Paper trading — full pipeline runs without a real broker |
 
-For the order fill side, the Telegram `/buy` command (step 2.3) IS the fill source in paper mode — no separate `SimulatedOrderFillFeed` needed. The `TelegramCommandHandler` directly creates a `TradeFillEvent` and passes it to the orchestrator.
+For the order fill side, the Telegram `/track` command (step 2.3) IS the fill source in paper mode — no separate `SimulatedOrderFillFeed` needed. The `TelegramCommandHandler` directly creates a `TradeFillEvent` and passes it to the orchestrator.
 
 **Tests:**
 - `SimulatedMarketDataFeedTest` — verify prices are generated, listener is called, feed can be stopped
@@ -177,14 +177,14 @@ Wire everything together for a runnable paper trading mode.
 |---|---|
 | New class | `com.kbquants.Main` (simple, just for paper trading MVP) |
 | Behavior | Reads `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TRADING_MODE` from env vars. Starts `TelegramBot` + `TradeMonitor` with `SimulatedMarketDataFeed` |
-| Result | `java -jar xit-mc.jar` → bot is listening → user sends `/buy INFY 1500 10` → simulated prices flow → milestone alerts → user sends `/exit` → done |
+| Result | `java -jar xit-mc.jar` → bot is listening → user sends `/track INFY 1500 10` → simulated prices flow → milestone alerts → user sends `/exit` → done |
 
 ### Acceptance criteria (Phase 2 complete when all are true)
 
 - [x] `OrderFillFeed` interface exists; `UpstoxOrderFillFeed` implements it; orchestrator takes the interface
 - [x] One `MilestoneLadder` configures notifications, phase transitions, AND ownership locks
 - [x] Phase triggers are at milestone values (5% and 13%), not independent hardcoded values
-- [x] Telegram bot accepts `/buy`, `/exit`, `/status` commands
+- [x] Telegram bot accepts `/track`, `/exit`, `/status` commands
 - [x] Paper trading mode works end-to-end: Telegram trigger → simulated prices → milestone alerts → force exit
 - [x] `ExitEngine` runs on every live tick (stop-loss ratchet, phases, ownership)
 - [x] Stop-loss hit triggers automatic exit notification

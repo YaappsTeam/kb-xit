@@ -4,9 +4,9 @@
 
 ## 1. What this project is
 
-`xit-mc` (Maven artifact `com.kbquants:xit-mc`) is a **trade exit management system**: it accepts a trade invocation (a confirmed broker fill, or a manual `/buy` command via Telegram), watches the live price, and manages the exit lifecycle — stop-loss, phase transitions, and profit-ownership locking — via a deterministic rules engine. It does not make entry decisions; see PRODUCT_REQUIREMENTS.md §2 for the full scope boundary.
+`xit-mc` (Maven artifact `com.kbquants:xit-mc`) is a **trade exit management system**: it accepts a trade invocation (a confirmed broker fill, or a manual `/track` command via Telegram), watches the live price, and manages the exit lifecycle — stop-loss, phase transitions, and profit-ownership locking — via a deterministic rules engine. It does not make entry decisions; see PRODUCT_REQUIREMENTS.md §2 for the full scope boundary.
 
-As of this update the project runs **paper trades on live Upstox prices**. The Telegram bot accepts `/buy`, `/exit`, `/status`, `/refresh`, `/ladder`, `/pause`, `/resume`, `/release`, `/observe` and `/manage`. With `MARKET_DATA=live` it resolves trading symbols against Upstox's instrument master, defaults the entry price to the LTP, sizes the position in whole lots from capital and risk, and measures every threshold net of broker-quoted costs.
+As of this update the project runs **paper trades on live Upstox prices**. The Telegram bot accepts `/track`, `/exit`, `/status`, `/refresh`, `/ladder`, `/pause`, `/resume`, `/release`, `/observe` and `/manage`. With `MARKET_DATA=live` it resolves trading symbols against Upstox's instrument master, defaults the entry price to the LTP, sizes the position in whole lots from capital and risk, and measures every threshold net of broker-quoted costs.
 
 **It never places a buy order.** It is purely an exit engine: every position it manages was bought elsewhere and handed to it. The order side (real sell orders, `UpstoxOrderFillFeed`) is Phase 3 — see IMPLEMENTATION_PLAN.md.
 
@@ -23,7 +23,7 @@ com.kbquants
 │                      ActiveLadder, MonitorMode, enums)
 ├── engine         ✅  The exit/stop-loss/ownership rules engine, driven by MilestoneLadder
 ├── instrument     ✅  Instrument master (download, weekly cache, symbol resolution) + lot- and
-│                      risk-aware position sizing + /buy resolution
+│                      risk-aware position sizing + /track resolution
 ├── live           ✅  Upstox implementations (market data, quotes, charges, auth) + TradeMonitor
 ├── notification   ✅  Telegram bot: outbound alerts incl. inline keyboards + inbound commands
 ├── session        ✅  Broker-agnostic interfaces (MarketDataFeed, OrderFillFeed, QuoteService,
@@ -89,7 +89,7 @@ This package holds every interface a broker or data source must implement to plu
 - `OrderFillFeed` / `TradeFillListener` / `TradeFillEvent` — **new, moved from `com.kbquants.live`.** `OrderFillFeed` is the broker-agnostic "where trade invocations come from" interface (`start(TradeFillListener)`, `stop()`). `TradeFillEvent` (orderId, instrumentKey, averagePrice, filledQuantity) and `TradeFillListener` were previously Upstox-adjacent classes living in the `live` package; they're genuinely broker-agnostic contracts and now live here, alongside `MarketDataFeed`. `UpstoxOrderFillFeed` (see §5.1) is the only real-broker implementation so far.
 - `DeterministicSimulationFeed` — feeds a fixed, pre-built `List<Double>` of prices sequentially with synthetic incrementing timestamps. Used for deterministic, reproducible tests of the engine end-to-end.
 - **`SimulatedMarketDataFeed`** — **new.** A `MarketDataFeed` implementation for paper trading: on `start()`, a background scheduled thread generates a new price every tick interval via a Gaussian random walk around the current price (`price += N(0,1) * volatility% * price`), floored above zero, and delivers it to the listener. Used by `Main` to drive paper trading without any broker.
-- **`NoOpOrderFillFeed`** — **new.** An `OrderFillFeed` that never produces fills; used in paper mode where trades are invoked directly via Telegram's `/buy` command rather than detected from a broker feed.
+- **`NoOpOrderFillFeed`** — **new.** An `OrderFillFeed` that never produces fills; used in paper mode where trades are invoked directly via Telegram's `/track` command rather than detected from a broker feed.
 
 **Test coverage:** `TradingSessionTest` (3), `DeterministicSimulationFeedTest` (1), `SimulatedMarketDataFeedTest` (3 — deterministic-random tick generation, price floor under extreme downward moves, input validation).
 
@@ -126,7 +126,7 @@ Command handling (via `TelegramCommandListener`):
 - `onExitAll()` — force-exits every open trade.
 - `onStatusRequested()` — reports instrument, entry, current price, phase, stop-loss, and order id for every open trade.
 
-**Test coverage:** `TradeMonitorTest` (11 tests) — fill → watch → milestone notify; duplicate-fill dedup; automatic stop-loss-triggered exit (and that no further processing happens after close); manual exit by order id; manual exit-all; status reporting (including the "no active trades" case); Telegram `/buy` producing a tracked trade. All via fake `OrderFillFeed`/`MarketDataFeed` — no network touched.
+**Test coverage:** `TradeMonitorTest` (11 tests) — fill → watch → milestone notify; duplicate-fill dedup; automatic stop-loss-triggered exit (and that no further processing happens after close); manual exit by order id; manual exit-all; status reporting (including the "no active trades" case); Telegram `/track` producing a tracked trade. All via fake `OrderFillFeed`/`MarketDataFeed` — no network touched.
 
 ## 6. Telegram: two-way control plane (`com.kbquants.notification`) — ✅ Implemented
 
@@ -141,14 +141,14 @@ Previously Telegram was outbound-only (alerts). It's now a full control plane: t
 
   | Command | Effect |
   |---|---|
-  | `/buy <instrumentKey> <price> <qty>` | Invoke a new trade |
+  | `/track <instrumentKey> <price> <qty>` | Invoke a new trade |
   | `/exit <orderId>` | Force-exit that trade |
   | `/exit all` (case-insensitive) | Force-exit every open trade |
   | `/status` | Report all open trades |
 
   JSON parsing of the `getUpdates` response uses Gson (already a transitive dependency of the Upstox SDK; pinned explicitly in `pom.xml` since it's now used directly).
 
-**Test coverage:** `TelegramCommandHandlerTest` (10 tests) — covers the pure `dispatch` logic exhaustively (valid/malformed `/buy`, `/exit <id>`, `/exit all` case-insensitivity, `/status`, unrecognized commands, null/blank text, extra whitespace tolerance). The actual HTTP long-polling loop is not unit-tested — same network caveat as §5.1 (`api.telegram.org` is blocked in this sandbox).
+**Test coverage:** `TelegramCommandHandlerTest` (10 tests) — covers the pure `dispatch` logic exhaustively (valid/malformed `/track`, `/exit <id>`, `/exit all` case-insensitivity, `/status`, unrecognized commands, null/blank text, extra whitespace tolerance). The actual HTTP long-polling loop is not unit-tested — same network caveat as §5.1 (`api.telegram.org` is blocked in this sandbox).
 
 ## 7. Paper trading entry point (`com.kbquants.Main`) — ✅ Implemented
 
@@ -202,8 +202,8 @@ Unchanged from the previous milestone.
 - **`CandleGenerator`** — still an empty stub.
 - **`hybridEnabled`/`hybridUpdateCount`/`atr`/`ownershipPercentage` fields on `TradeContext`** — still unused hooks.
 - **`PHASE_4` (forced EOD exit)** — still no automatic transition logic; only `ExitEngine.forceExit()` (now reachable live via Telegram `/exit`).
-- **The order side is not wired into `Main`** — live *market data* is (`MARKET_DATA=live`), but `UpstoxOrderFillFeed` is still unused there, so trades only ever arrive via `/buy`. Wiring it is Phase 3. When it happens, note that it streams fills for the **whole account**: adoption becomes opt-out, and `/pause` (or an explicit adopt step) is what prevents unrelated positions being managed.
-- **The app never places buy orders** — it is purely an exit engine, placing sell orders for positions bought elsewhere. `/buy` declares an existing position rather than ordering anything; the name is a legacy misnomer.
+- **The order side is not wired into `Main`** — live *market data* is (`MARKET_DATA=live`), but `UpstoxOrderFillFeed` is still unused there, so trades only ever arrive via `/track`. Wiring it is Phase 3. When it happens, note that it streams fills for the **whole account**: adoption becomes opt-out, and `/pause` (or an explicit adopt step) is what prevents unrelated positions being managed.
+- **The app never places buy orders** — it is purely an exit engine, placing sell orders for positions bought elsewhere. `/track` declares an existing position rather than ordering anything; the name is a legacy misnomer.
 - **Ladder numbers are unvalidated** — the EQUITY/OPTIONS sets and their phase placements are reasoned starting points, not derived from data. The simulation layer cannot validate them either: it models GBM on the instrument, whereas an option premium is a convex function of the underlying plus time decay.
 - **Sell-side charges are quoted at the entry price** at fill time, since the exit price is unknown. Drift is ~₹0.31 near breakeven and ~₹89 at a +100% exit; the settled figure reported at exit corrects it.
 - **Order slicing is not implemented** — quantity is capped at the exchange freeze limit (27 lots for NIFTY) rather than split across orders, because multiple fills at different prices do not fit the single-entry-price model.

@@ -1,7 +1,7 @@
 package com.kbquants.instrument;
 
-import com.kbquants.session.BuyRequest;
-import com.kbquants.session.BuyRequestResolver;
+import com.kbquants.session.TrackRequest;
+import com.kbquants.session.TrackRequestResolver;
 import com.kbquants.session.QuoteService;
 
 import java.util.List;
@@ -26,17 +26,17 @@ import java.util.OptionalDouble;
  * Matching also ignores case and spaces, so the same contract can be typed
  * as {@code nifty25000ce18aug26}.
  */
-public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolver {
+public final class InstrumentAwareTrackRequestResolver implements TrackRequestResolver {
 
     private final InstrumentCatalog catalog;
     private final QuoteService quoteService;
     private final PositionSizer sizer;
 
-    public InstrumentAwareBuyRequestResolver(InstrumentRegistry registry, QuoteService quoteService, PositionSizer sizer) {
+    public InstrumentAwareTrackRequestResolver(InstrumentRegistry registry, QuoteService quoteService, PositionSizer sizer) {
         this(new InstrumentCatalog(registry), quoteService, sizer);
     }
 
-    public InstrumentAwareBuyRequestResolver(InstrumentCatalog catalog, QuoteService quoteService, PositionSizer sizer) {
+    public InstrumentAwareTrackRequestResolver(InstrumentCatalog catalog, QuoteService quoteService, PositionSizer sizer) {
         this.catalog = Objects.requireNonNull(catalog, "catalog must not be null");
         this.quoteService = Objects.requireNonNull(quoteService, "quoteService must not be null");
         this.sizer = Objects.requireNonNull(sizer, "sizer must not be null");
@@ -56,10 +56,10 @@ public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolv
     }
 
     @Override
-    public BuyRequest resolve(List<String> args) {
+    public TrackRequest resolve(List<String> args) {
 
         if (args.isEmpty()) {
-            return BuyRequest.rejected("usage: /buy <symbol> [price] [qty]");
+            return TrackRequest.rejected("usage: /track <symbol> [price] [qty]");
         }
 
         for (int symbolTokens = args.size(); symbolTokens >= 1; symbolTokens--) {
@@ -77,7 +77,7 @@ public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolv
                 // one, and only worth reporting for the full-length candidate;
                 // shorter prefixes are just wrong guesses.
                 if (symbolTokens == args.size() && registry().candidatesFor(candidate).size() > 1) {
-                    return BuyRequest.rejected(ambiguityMessage(candidate));
+                    return TrackRequest.rejected(ambiguityMessage(candidate));
                 }
                 continue;
             }
@@ -85,16 +85,16 @@ public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolv
             return build(found.get(), trailing);
         }
 
-        return BuyRequest.rejected("unknown instrument: " + String.join(" ", args));
+        return TrackRequest.rejected("unknown instrument: " + String.join(" ", args));
     }
 
-    private BuyRequest build(Instrument instrument, List<String> trailing) {
+    private TrackRequest build(Instrument instrument, List<String> trailing) {
 
         // An index has no tradable position behind it -- you trade its
         // options or futures. Accepting the buy would open a paper trade
         // that could never correspond to a real one.
         if ("NSE_INDEX".equals(instrument.getSegment())) {
-            return BuyRequest.rejected(instrument.getTradingSymbol()
+            return TrackRequest.rejected(instrument.getTradingSymbol()
                     + " is an index and cannot be bought — trade its option or future instead");
         }
 
@@ -106,32 +106,32 @@ public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolv
         } else {
             OptionalDouble ltp = quoteService.lastTradedPrice(instrument.getInstrumentKey());
             if (ltp.isEmpty()) {
-                return BuyRequest.rejected("could not fetch last traded price for " + instrument.getTradingSymbol()
-                        + "; pass the price explicitly: /buy <symbol> <price> <qty>");
+                return TrackRequest.rejected("could not fetch last traded price for " + instrument.getTradingSymbol()
+                        + "; pass the price explicitly: /track <symbol> <price> <qty>");
             }
             price = ltp.getAsDouble();
             priceNote = "price from LTP";
         }
 
         if (price <= 0) {
-            return BuyRequest.rejected("price must be positive, got " + price);
+            return TrackRequest.rejected("price must be positive, got " + price);
         }
 
         if (!trailing.isEmpty()) {
             int quantity = Integer.parseInt(trailing.get(trailing.size() - 1));
             if (quantity <= 0) {
-                return BuyRequest.rejected("quantity must be positive, got " + quantity);
+                return TrackRequest.rejected("quantity must be positive, got " + quantity);
             }
-            return BuyRequest.accepted(instrument.getInstrumentKey(), instrument.getTradingSymbol(),
+            return TrackRequest.accepted(instrument.getInstrumentKey(), instrument.getTradingSymbol(),
                     price, quantity, tickSizeOf(instrument), priceNote);
         }
 
         PositionSizer.Result sized = sizer.size(instrument, price);
         if (!sized.isAccepted()) {
-            return BuyRequest.rejected(sized.getRejectionReason());
+            return TrackRequest.rejected(sized.getRejectionReason());
         }
 
-        return BuyRequest.accepted(instrument.getInstrumentKey(), instrument.getTradingSymbol(),
+        return TrackRequest.accepted(instrument.getInstrumentKey(), instrument.getTradingSymbol(),
                 price, sized.getQuantity(), tickSizeOf(instrument), sizingNote(instrument, sized));
     }
 

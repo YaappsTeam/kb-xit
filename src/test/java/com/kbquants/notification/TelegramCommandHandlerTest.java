@@ -19,8 +19,8 @@ class TelegramCommandHandlerTest {
         final List<String> events = new ArrayList<>();
 
         @Override
-        public void onBuy(List<String> args) {
-            events.add("buy:" + String.join("|", args));
+        public void onTrack(List<String> args) {
+            events.add("track:" + String.join("|", args));
         }
 
         @Override
@@ -65,13 +65,13 @@ class TelegramCommandHandlerTest {
     }
 
     @Test
-    void shouldForwardBuyArgumentsUninterpreted() {
+    void shouldForwardTrackArgumentsUninterpreted() {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy NSE_EQ|INE848E01016 1500.50 10", listener);
+        TelegramCommandHandler.dispatch("/track NSE_EQ|INE848E01016 1500.50 10", listener);
 
-        assertEquals(List.of("buy:NSE_EQ|INE848E01016|1500.50|10"), listener.events);
+        assertEquals(List.of("track:NSE_EQ|INE848E01016|1500.50|10"), listener.events);
     }
 
     /**
@@ -85,9 +85,9 @@ class TelegramCommandHandlerTest {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy NIFTY 50", listener);
+        TelegramCommandHandler.dispatch("/track NIFTY 50", listener);
 
-        assertEquals(List.of("buy:NIFTY|50"), listener.events);
+        assertEquals(List.of("track:NIFTY|50"), listener.events);
     }
 
     @Test
@@ -95,19 +95,34 @@ class TelegramCommandHandlerTest {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy NIFTY50", listener);
+        TelegramCommandHandler.dispatch("/track NIFTY50", listener);
 
-        assertEquals(List.of("buy:NIFTY50"), listener.events);
+        assertEquals(List.of("track:NIFTY50"), listener.events);
     }
 
     @Test
-    void shouldIgnoreBuyCommandWithNoArguments() {
+    void shouldIgnoreTrackCommandWithNoArguments() {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy", listener);
+        TelegramCommandHandler.dispatch("/track", listener);
 
         assertTrue(listener.events.isEmpty());
+    }
+
+    /**
+     * /buy was renamed to /track, but the old name still works: it is typed
+     * under time pressure, and an unrecognised command would silently do
+     * nothing while the user believed a trade was being watched.
+     */
+    @Test
+    void legacyBuyCommandShouldStillDispatchAsTrack() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/buy NIFTY50", listener);
+
+        assertEquals(List.of("track:NIFTY50"), listener.events);
     }
 
     @Test
@@ -263,8 +278,8 @@ class TelegramCommandHandlerTest {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("  /buy   NSE_EQ|INE848E01016   1500   10  ", listener);
+        TelegramCommandHandler.dispatch("  /track   NSE_EQ|INE848E01016   1500   10  ", listener);
 
-        assertEquals(List.of("buy:NSE_EQ|INE848E01016|1500|10"), listener.events);
+        assertEquals(List.of("track:NSE_EQ|INE848E01016|1500|10"), listener.events);
     }
 }

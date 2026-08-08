@@ -2,8 +2,8 @@ package com.kbquants.live;
 
 import com.kbquants.domain.MonitorMode;
 import com.kbquants.notification.Notifier;
-import com.kbquants.session.BuyRequestResolver;
-import com.kbquants.session.LiteralBuyRequestResolver;
+import com.kbquants.session.TrackRequestResolver;
+import com.kbquants.session.LiteralTrackRequestResolver;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.PriceListener;
@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class TradeMonitorControlTest {
 
-    private static final BuyRequestResolver RESOLVER = new LiteralBuyRequestResolver();
+    private static final TrackRequestResolver RESOLVER = new LiteralTrackRequestResolver();
 
     private static final class FakeOrderFillFeed implements OrderFillFeed {
         TradeFillListener listener;

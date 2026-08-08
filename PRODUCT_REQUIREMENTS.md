@@ -62,7 +62,7 @@ The orchestrator (`TradeMonitor`) depends only on interfaces — it never import
 ```
 Trader                    Telegram Bot               TradeMonitor
   |                           |                          |
-  |-- /buy INFY 1500 10 ---->|                          |
+  |-- /track INFY 1500 10 ---->|                          |
   |                           |-- TradeFillEvent ------>|
   |                           |                          |-- start MarketDataFeed
   |                           |                          |   (simulated or live)
@@ -108,12 +108,12 @@ Same `TradeMonitor`, same milestone ladder, same exit engine. Only the `OrderFil
 
 The app does NOT make entry decisions. It accepts an invocation: "I am now in this trade."
 
-The system never places a buy. Every position it manages was bought elsewhere, so invocation is always an **adoption** of an existing position — `/buy` declares "I am in this trade, manage the exit", it does not order anything.
+The system never places a buy. Every position it manages was bought elsewhere, so invocation is always an **adoption** of an existing position — `/track` declares "I am in this trade, manage the exit", it does not order anything.
 
 | Mode | How invocation happens |
 |---|---|
-| **Telegram, simulated data** | `/buy <instrumentKey> <price> <qty>` — everything explicit |
-| **Telegram, live data** | `/buy <symbol> [price] [qty]` — symbol resolved against the instrument master, price defaulted to LTP, quantity sized from capital and risk (F5a) |
+| **Telegram, simulated data** | `/track <instrumentKey> <price> <qty>` — everything explicit |
+| **Telegram, live data** | `/track <symbol> [price] [qty]` — symbol resolved against the instrument master, price defaulted to LTP, quantity sized from capital and risk (F5a) |
 | **Live broker** | `OrderFillFeed` detects a confirmed BUY fill from the broker WebSocket |
 
 All paths produce the same `TradeFillEvent(orderId, instrumentKey, averagePrice, filledQuantity, tickSize)` — the rest of the system does not know or care which path created it.
@@ -229,7 +229,7 @@ The engine can be disengaged without closing positions. This matters because the
 ### F7. Paper trading mode
 
 Full end-to-end flow without a real broker:
-- Trade triggered via Telegram `/buy` command
+- Trade triggered via Telegram `/track` command
 - Market data from `SimulatedMarketDataFeed` (random price walks around entry price)
 - Exit engine runs on every simulated tick
 - Milestone notifications sent to Telegram
@@ -286,7 +286,7 @@ No secrets are stored in the repository. All credentials are supplied via enviro
 ### Phase 2 — Testable MVP (NEXT)
 
 - **Broker abstraction**: `OrderFillFeed` interface, move `TradeFillEvent`/`TradeFillListener` to `session` package
-- **Telegram as control plane**: two-way bot (receive `/buy`, `/exit`, `/status` commands; send milestone alerts)
+- **Telegram as control plane**: two-way bot (receive `/track`, `/exit`, `/status` commands; send milestone alerts)
 - **Paper trading mode**: `SimulatedMarketDataFeed` + `ManualOrderFillFeed` for end-to-end testing
 - **Unified milestone ladder**: merge ProfitMilestoneTracker + PhaseManager + ownership thresholds into one configurable system
 - **Wire ExitEngine into live monitoring**: stop-loss + phases + ownership on every price tick

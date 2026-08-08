@@ -156,7 +156,11 @@ public class TelegramCommandHandler {
         String[] parts = text.trim().split("\\s+");
 
         switch (parts[0]) {
-            case "/buy" -> dispatchBuy(parts, text, listener);
+            case "/track" -> dispatchTrack(parts, text, listener);
+            // Kept working rather than removed: this is typed under time
+            // pressure, and an unrecognised command would silently do
+            // nothing while the user believed a trade was being watched.
+            case "/buy" -> dispatchTrack(parts, text, listener);
             case "/exit" -> dispatchExit(parts, text, listener);
             case "/status" -> listener.onStatusRequested();
             case "/refresh" -> listener.onRefreshInstruments();
@@ -177,12 +181,12 @@ public class TelegramCommandHandler {
      * can contain spaces ("NSE_INDEX|Nifty 50", "NIFTY 50"), and a trailing
      * number may be a quantity or part of the symbol itself.
      */
-    private static void dispatchBuy(String[] parts, String rawText, TelegramCommandListener listener) {
+    private static void dispatchTrack(String[] parts, String rawText, TelegramCommandListener listener) {
         if (parts.length < 2) {
-            log.warn("Malformed /buy command (expected /buy <symbol> [price] [qty]): {}", rawText);
+            log.warn("Malformed {} command (expected /track <symbol> [price] [qty]): {}", parts[0], rawText);
             return;
         }
-        listener.onBuy(List.of(Arrays.copyOfRange(parts, 1, parts.length)));
+        listener.onTrack(List.of(Arrays.copyOfRange(parts, 1, parts.length)));
     }
 
     /**

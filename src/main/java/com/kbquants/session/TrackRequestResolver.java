@@ -3,15 +3,15 @@ package com.kbquants.session;
 import java.util.List;
 
 /**
- * Turns the raw arguments of a /buy command into a {@link BuyRequest}.
+ * Turns the raw arguments of a /buy command into a {@link TrackRequest}.
  * <p>
  * Implementations differ in how much they are allowed to infer: with an
  * instrument master and a price source available, a bare symbol is enough;
  * without them, everything must be stated explicitly.
  */
-public interface BuyRequestResolver {
+public interface TrackRequestResolver {
 
-    BuyRequest resolve(List<String> args);
+    TrackRequest resolve(List<String> args);
 
     /**
      * Forces the instrument master to be re-fetched, bypassing its weekly
