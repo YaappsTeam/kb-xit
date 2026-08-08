@@ -42,9 +42,19 @@ public final class EstimatedChargesService implements ChargesService {
 
     @Override
     public TradeCost roundTripCost(String instrumentKey, double price, int quantity) {
-        double invested = price * quantity;
-        double perSide = flatPerOrder + invested * proportionalFor(instrumentKey);
-        return new TradeCost(perSide, perSide, invested, true);
+        return settledCost(instrumentKey, price, price, quantity);
+    }
+
+    @Override
+    public TradeCost settledCost(String instrumentKey, double entryPrice, double exitPrice, int quantity) {
+        double proportional = proportionalFor(instrumentKey);
+        double invested = entryPrice * quantity;
+        double exitValue = exitPrice * quantity;
+        return new TradeCost(
+                flatPerOrder + invested * proportional,
+                flatPerOrder + exitValue * proportional,
+                invested,
+                true);
     }
 
     /**

@@ -63,17 +63,22 @@ public class UpstoxChargesService implements ChargesService {
 
     @Override
     public TradeCost roundTripCost(String instrumentKey, double price, int quantity) {
+        return settledCost(instrumentKey, price, price, quantity);
+    }
 
-        OptionalDouble buy = charges(instrumentKey, price, quantity, "BUY");
-        OptionalDouble sell = charges(instrumentKey, price, quantity, "SELL");
+    @Override
+    public TradeCost settledCost(String instrumentKey, double entryPrice, double exitPrice, int quantity) {
+
+        OptionalDouble buy = charges(instrumentKey, entryPrice, quantity, "BUY");
+        OptionalDouble sell = charges(instrumentKey, exitPrice, quantity, "SELL");
 
         if (buy.isEmpty() || sell.isEmpty()) {
-            TradeCost estimated = fallback.roundTripCost(instrumentKey, price, quantity);
-            log.warn("Falling back to estimated charges for {}: {}", instrumentKey, estimated);
+            TradeCost estimated = fallback.settledCost(instrumentKey, entryPrice, exitPrice, quantity);
+            log.warn("Falling back to modelled charges for {}: {}", instrumentKey, estimated);
             return estimated;
         }
 
-        return new TradeCost(buy.getAsDouble(), sell.getAsDouble(), price * quantity, false);
+        return new TradeCost(buy.getAsDouble(), sell.getAsDouble(), entryPrice * quantity, false);
     }
 
     private OptionalDouble charges(String instrumentKey, double price, int quantity, String side) {

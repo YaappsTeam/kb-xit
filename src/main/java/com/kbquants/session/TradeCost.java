@@ -44,22 +44,43 @@ public final class TradeCost {
     /**
      * The price at which the position breaks even net of all charges --
      * the point where "profit" starts meaning money you actually keep.
+     * <p>
+     * Sell-side charges scale with the exit price, which is unknown at
+     * entry, so they are computed at the entry price. Near breakeven that
+     * understates by about Rs 0.31 on a Rs 46.7k option position (0.0007%
+     * of capital), which is why the breakeven figure itself is sound even
+     * though the same approximation drifts to Rs 89 at a +100% exit.
      */
     public double breakevenPrice(double entryPrice) {
         return entryPrice * (1 + getFractionOfInvested());
     }
 
     /**
-     * Sell-side charges scale with the exit price, which is unknown at
-     * entry, so they are computed at the entry price instead. The
-     * understatement is negligible -- on a Rs 46.7k option position the
-     * difference between charging at entry and at the resulting breakeven
-     * is about Rs 0.24, or 0.0005% of invested.
+     * Breakeven rounded up to a price that can actually be traded.
+     * <p>
+     * Matters most where it is least obvious: on a Rs 1 option premium the
+     * tick is Rs 0.05, so a computed breakeven of 1.0253 is unreachable --
+     * the first sellable price above it is 1.05, making the real breakeven
+     * +5% rather than +2.53%. Rounding down, or not rounding at all, would
+     * declare breakeven at a price no one can exit at.
      */
+    public double breakevenPrice(double entryPrice, double tickSize) {
+        double exact = breakevenPrice(entryPrice);
+        if (tickSize <= 0) {
+            return exact;
+        }
+        return Math.ceil(exact / tickSize - 1e-9) * tickSize;
+    }
+
+    /** Net profit on exiting at this price, after all charges. */
+    public double netProfitAt(double entryPrice, double exitPrice, int quantity) {
+        return (exitPrice - entryPrice) * quantity - getTotalCharges();
+    }
+
     @Override
     public String toString() {
         return String.format("%s round-trip cost %.2f on %.2f invested (%.3f%%)",
-                estimated ? "estimated" : "broker-quoted",
+                estimated ? "modelled" : "broker-quoted",
                 getTotalCharges(), investedAmount, getFractionOfInvested() * 100);
     }
 }

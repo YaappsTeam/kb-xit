@@ -19,25 +19,32 @@ public final class BuyRequest {
     private final String displaySymbol;
     private final double price;
     private final int quantity;
+    private final double tickSize;
     private final String note;
     private final String rejectionReason;
 
     private BuyRequest(boolean accepted, String instrumentKey, String displaySymbol, double price,
-                       int quantity, String note, String rejectionReason) {
+                       int quantity, double tickSize, String note, String rejectionReason) {
         this.accepted = accepted;
         this.instrumentKey = instrumentKey;
         this.displaySymbol = displaySymbol;
         this.price = price;
         this.quantity = quantity;
+        this.tickSize = tickSize;
         this.note = note;
         this.rejectionReason = rejectionReason;
     }
 
     public static BuyRequest accepted(String instrumentKey, String displaySymbol, double price, int quantity, String note) {
-        return new BuyRequest(true, instrumentKey, displaySymbol, price, quantity, note, null);
+        return accepted(instrumentKey, displaySymbol, price, quantity, 0, note);
+    }
+
+    public static BuyRequest accepted(String instrumentKey, String displaySymbol, double price, int quantity,
+                                      double tickSize, String note) {
+        return new BuyRequest(true, instrumentKey, displaySymbol, price, quantity, tickSize, note, null);
     }
 
     public static BuyRequest rejected(String reason) {
-        return new BuyRequest(false, null, null, 0, 0, null, reason);
+        return new BuyRequest(false, null, null, 0, 0, 0, null, reason);
     }
 }

@@ -13,5 +13,16 @@ package com.kbquants.session;
  */
 public interface ChargesService {
 
+    /**
+     * Estimated round-trip cost at entry time. The sell side is priced at
+     * the entry price, since the exit price is not yet known.
+     */
     TradeCost roundTripCost(String instrumentKey, double price, int quantity);
+
+    /**
+     * Actual round-trip cost once the exit price is known: buy side priced
+     * at entry, sell side at the real exit. This is what turns the running
+     * estimate into a settled figure worth reporting as final.
+     */
+    TradeCost settledCost(String instrumentKey, double entryPrice, double exitPrice, int quantity);
 }

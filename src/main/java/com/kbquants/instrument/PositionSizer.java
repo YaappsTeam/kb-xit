@@ -1,5 +1,6 @@
 package com.kbquants.instrument;
 
+import com.kbquants.domain.ActiveLadder;
 import lombok.Getter;
 
 /**
@@ -20,12 +21,29 @@ import lombok.Getter;
 public final class PositionSizer {
 
     private final double capitalPerTrade;
+    private final double maxRiskPerTrade;
+    private final ActiveLadder activeLadder;
 
     public PositionSizer(double capitalPerTrade) {
+        this(capitalPerTrade, 0, null);
+    }
+
+    /**
+     * @param maxRiskPerTrade rupees to lose if the hard stop is hit, or 0 to
+     *                        size on capital alone
+     * @param activeLadder    supplies the hard stop the risk is measured
+     *                        against; it moves with the selected set
+     */
+    public PositionSizer(double capitalPerTrade, double maxRiskPerTrade, ActiveLadder activeLadder) {
         if (capitalPerTrade <= 0) {
             throw new IllegalArgumentException("capitalPerTrade must be positive: " + capitalPerTrade);
         }
+        if (maxRiskPerTrade > 0 && activeLadder == null) {
+            throw new IllegalArgumentException("maxRiskPerTrade needs an activeLadder to read the hard stop from");
+        }
         this.capitalPerTrade = capitalPerTrade;
+        this.maxRiskPerTrade = maxRiskPerTrade;
+        this.activeLadder = activeLadder;
     }
 
     public Result size(Instrument instrument, double price) {
@@ -36,21 +54,51 @@ public final class PositionSizer {
 
         int lotSize = instrument.effectiveLotSize();
         double contractCost = price * lotSize;
-        int lots = (int) Math.floor(capitalPerTrade / contractCost);
 
-        if (lots < 1) {
+        int lotsFromCapital = (int) Math.floor(capitalPerTrade / contractCost);
+        if (lotsFromCapital < 1) {
             return Result.rejected(String.format(
                     "one lot of %s costs %.2f (%d x %.2f) which exceeds capital per trade %.2f",
                     instrument.getTradingSymbol(), contractCost, lotSize, price, capitalPerTrade));
+        }
+
+        // Risk, not capital, is what "preserve capital" actually constrains.
+        // A wide stop is not the same as a large loss: 40% of a small
+        // position loses less than 15% of a large one, and only the wide
+        // stop survives the noise an option premium generates. So size the
+        // position from the loss it would take rather than narrowing the
+        // stop until the rupees look tolerable.
+        int lots = lotsFromCapital;
+        boolean limitedByRisk = false;
+
+        if (maxRiskPerTrade > 0) {
+            double riskPerLot = contractCost * activeLadder.get().getHardStopPercent();
+            int lotsFromRisk = (int) Math.floor(maxRiskPerTrade / riskPerLot);
+
+            if (lotsFromRisk < 1) {
+                return Result.rejected(String.format(
+                        "one lot of %s risks %.2f at the %.0f%% hard stop, above max risk per trade %.2f",
+                        instrument.getTradingSymbol(), riskPerLot,
+                        activeLadder.get().getHardStopPercent() * 100, maxRiskPerTrade));
+            }
+            if (lotsFromRisk < lots) {
+                lots = lotsFromRisk;
+                limitedByRisk = true;
+            }
         }
 
         int maxLots = instrument.maxLotsPerOrder();
         boolean capped = maxLots > 0 && lots > maxLots;
         if (capped) {
             lots = maxLots;
+            limitedByRisk = false;
         }
 
-        return Result.accepted(lots * lotSize, lots, lots * contractCost, capped);
+        double riskAtStop = maxRiskPerTrade > 0
+                ? lots * contractCost * activeLadder.get().getHardStopPercent()
+                : 0;
+
+        return Result.accepted(lots * lotSize, lots, lots * contractCost, capped, limitedByRisk, riskAtStop);
     }
 
     @Getter
@@ -61,24 +109,30 @@ public final class PositionSizer {
         private final int lots;
         private final double deployedCapital;
         private final boolean cappedByFreezeLimit;
+        private final boolean limitedByRisk;
+        private final double riskAtHardStop;
         private final String rejectionReason;
 
         private Result(boolean accepted, int quantity, int lots, double deployedCapital,
-                       boolean cappedByFreezeLimit, String rejectionReason) {
+                       boolean cappedByFreezeLimit, boolean limitedByRisk, double riskAtHardStop,
+                       String rejectionReason) {
             this.accepted = accepted;
             this.quantity = quantity;
             this.lots = lots;
             this.deployedCapital = deployedCapital;
             this.cappedByFreezeLimit = cappedByFreezeLimit;
+            this.limitedByRisk = limitedByRisk;
+            this.riskAtHardStop = riskAtHardStop;
             this.rejectionReason = rejectionReason;
         }
 
-        static Result accepted(int quantity, int lots, double deployedCapital, boolean capped) {
-            return new Result(true, quantity, lots, deployedCapital, capped, null);
+        static Result accepted(int quantity, int lots, double deployedCapital, boolean capped,
+                               boolean limitedByRisk, double riskAtHardStop) {
+            return new Result(true, quantity, lots, deployedCapital, capped, limitedByRisk, riskAtHardStop, null);
         }
 
         static Result rejected(String reason) {
-            return new Result(false, 0, 0, 0, false, reason);
+            return new Result(false, 0, 0, 0, false, false, 0, reason);
         }
     }
 }

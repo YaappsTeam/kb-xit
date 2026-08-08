@@ -183,9 +183,50 @@ Concretely, `basePrice` becomes the cost-inclusive breakeven, and everything mea
 Two things to expect:
 
 - **These figures read lower than Upstox's own P&L screen**, which shows gross. Same position, two numbers; ours is the one you take home.
-- **Breakeven is an estimate**, because sell-side charges depend on the exit price, which isn't known at entry. Computing them at the entry price understates by around ₹0.24 on a ₹46.7k position — 0.0005% of capital.
+- **Everything before exit is an estimate**, and labelled as such. Sell-side charges depend on the exit price, which isn't known at entry, so they're quoted at the entry price. Near breakeven that's worth ₹0.31 on a ₹46.7k position, but it drifts with distance: ₹18.84 at a +21% exit, ₹89.70 at +100%.
 
-If the charges call fails, a built-in model takes over and the trade is marked `estimated`. It's calibrated against real quotes and separates derivatives from equity (options genuinely cost several times what intraday equity does): within ₹0.09 of the broker on the ACC position above.
+**When the trade closes, charges are recomputed at the real exit price** and the settled figure is reported — gross, actual charges, the entry-time estimate for comparison, and net:
+
+```
+settled: gross +25704.90, charges 207.21 (estimated 157.87 at entry), net +25497.69
+```
+
+If the charges call fails, a built-in model takes over and the figure is labelled `modelled` rather than `broker-quoted`. It's calibrated against real quotes and separates derivatives from equity (options genuinely cost several times intraday equity): within ₹0.09 of the broker on the ACC position above. The model also runs **alongside** every broker quote, reporting the delta, so it stays honest over time.
+
+### Risk-based position sizing
+
+`CAPITAL_PER_TRADE` caps exposure; it does **not** cap losses. At ₹50,000 with the OPTIONS hard stop of 40%, a stopped-out trade loses **₹18,813** — verified, not estimated.
+
+Tightening the stop is the wrong fix: 40% of an option premium is ordinary intraday noise, and at 20% you'd be stopped out of most trades that go on to work. Rupee risk is `stop% × invested`, so the lever is size, not stop width. Set `MAX_RISK_PER_TRADE` and the position is sized so hitting the stop costs that much:
+
+```
+lots = min( capital / lotCost , maxRisk / (lotCost × hardStop%) )   then capped at the freeze limit
+```
+
+| `MAX_RISK_PER_TRADE` | Lots | Deployed | Loss at the stop |
+|---|---|---|---|
+| unset | 13 | ₹46,729 | ₹18,813 |
+| ₹10,000 | 6 | ₹21,567 | ₹8,627 |
+| ₹5,000 | 3 | ₹10,784 | ₹4,313 |
+
+The hard stop comes from the **active milestone set**, so switching sets re-sizes accordingly.
+
+### Expiry day and cheap premiums
+
+All NIFTY option contracts have lot 65, freeze 1,755 and a ₹0.05 tick — so **27 lots per order**, every strike. Three things change as premiums get cheap:
+
+| Premium | Max deployable (27 lots) | 1 tick | Round-trip cost | Real breakeven |
+|---|---|---|---|---|
+| ₹55.30 | ₹97,052 | 0.1% | 0.29% | +0.36% |
+| ₹5.00 | ₹8,775 | 1.0% | 0.77% | +1.00% |
+| ₹1.00 | ₹1,755 | 5.0% | 2.93% | **+5.00%** |
+| ₹0.50 | ₹878 | 10.0% | 5.62% | **+10.00%** |
+
+1. **The freeze limit binds before your capital does.** At ₹1 premium, 27 lots is ₹1,755 — you cannot deploy ₹50,000 in one order, and orders aren't sliced.
+2. **One tick becomes a large percentage**, so breakeven has to be **rounded up to a tradable price**. At ₹1 the computed breakeven is ₹1.0293, which nobody can sell at; the real one is ₹1.05, making breakeven +5% rather than +2.93%.
+3. **Costs stop being a rounding error** — 2.93% of deployed at ₹1, 5.62% at ₹0.50.
+
+`/buy` warns rather than refuses in each case: on expiry day a cheap lottery ticket may be exactly what you intend, but you'll be told when the freeze cap is binding, when costs exceed 2% of deployed, and when one tick is coarser than the first ladder rung (which makes the early milestones fire together).
 
 ## Milestone sets
 
@@ -245,7 +286,7 @@ Selection rules:
 ## Running tests
 
 ```bash
-mvn test              # full suite (214 tests)
+mvn test              # full suite (229 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 

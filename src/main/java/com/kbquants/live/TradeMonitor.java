@@ -1,5 +1,6 @@
 package com.kbquants.live;
 
+import com.kbquants.domain.ActiveLadder;
 import com.kbquants.domain.ExitModel;
 import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.MilestoneSets;
@@ -42,8 +43,10 @@ import java.util.function.Function;
  * stop-loss) or on a manual /exit / /exit all command. Either way the
  * trade is marked closed and no further price ticks are processed for it.
  * <p>
- * basePrice is set equal to entryPrice for live/paper trades (breakeven
- * protection once Phase 2 is reached) -- this differs from the
+ * basePrice is the <b>cost-inclusive breakeven</b>, not the entry price:
+ * capital is only preserved once brokerage, STT, exchange charges, GST and
+ * stamp duty are covered, so that is the price PHASE_2 protects and the
+ * point every reported percentage is measured from. This differs from the
  * simulation/backtest default of entry x 2.0, which is a research
  * parameter, not a live trading default. See IMPLEMENTATION_PLAN.md.
  */
@@ -52,18 +55,19 @@ public class TradeMonitor implements TelegramCommandListener {
 
     private final Notifier notifier;
     private final Function<TradeFillEvent, MarketDataFeed> feedFactory;
-    private final MilestoneLadder ladder;
     private final BuyRequestResolver buyRequestResolver;
     private final ChargesService chargesService;
     private final Map<String, ActiveTrade> activeTrades = new ConcurrentHashMap<>();
 
     /**
-     * The set new trades will use. Volatile because it is changed from the
-     * Telegram poller thread and read wherever a fill arrives. Open trades
-     * keep the ladder they were opened with -- their ExitEngine and
-     * milestone tracker are built from it at fill time.
+     * The set new trades will use, shared with position sizing so both see
+     * the same choice. Open trades keep the ladder they were opened with --
+     * their ExitEngine and milestone tracker are built from it at fill time.
      */
-    private volatile MilestoneLadder activeLadder;
+    private final ActiveLadder activeLadder;
+
+    /** Runs alongside the broker's quote so the model can be checked against it. */
+    private final ChargesService referenceCharges = new EstimatedChargesService();
 
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                         Notifier notifier, BuyRequestResolver buyRequestResolver) {
@@ -79,12 +83,22 @@ public class TradeMonitor implements TelegramCommandListener {
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                          Notifier notifier, BuyRequestResolver buyRequestResolver, MilestoneLadder ladder,
                          ChargesService chargesService) {
+        this(orderFillFeed, feedFactory, notifier, buyRequestResolver, new ActiveLadder(ladder), chargesService);
+    }
+
+    /**
+     * Takes the ActiveLadder rather than a ladder so that position sizing,
+     * which needs the same hard stop, cannot drift out of step when the
+     * user switches sets.
+     */
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, BuyRequestResolver buyRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService) {
         this.chargesService = Objects.requireNonNull(chargesService, "chargesService must not be null");
         this.feedFactory = Objects.requireNonNull(feedFactory, "feedFactory must not be null");
         this.notifier = Objects.requireNonNull(notifier, "notifier must not be null");
         this.buyRequestResolver = Objects.requireNonNull(buyRequestResolver, "buyRequestResolver must not be null");
-        this.ladder = Objects.requireNonNull(ladder, "ladder must not be null");
-        this.activeLadder = ladder;
+        this.activeLadder = Objects.requireNonNull(activeLadder, "activeLadder must not be null");
         Objects.requireNonNull(orderFillFeed, "orderFillFeed must not be null").start(this::onFill);
     }
 
@@ -92,7 +106,7 @@ public class TradeMonitor implements TelegramCommandListener {
 
         // Snapshotted so a set change mid-fill cannot leave the engine and
         // the tracker on different ladders.
-        MilestoneLadder ladderForTrade = activeLadder;
+        MilestoneLadder ladderForTrade = activeLadder.get();
 
         // basePrice is the cost-inclusive breakeven, not the entry price:
         // capital is only genuinely preserved once brokerage, STT, exchange
@@ -101,7 +115,7 @@ public class TradeMonitor implements TelegramCommandListener {
         // measures from here, so every percentage reported is net.
         TradeCost cost = chargesService.roundTripCost(
                 fill.getInstrumentKey(), fill.getAveragePrice(), fill.getFilledQuantity());
-        double breakeven = cost.breakevenPrice(fill.getAveragePrice());
+        double breakeven = cost.breakevenPrice(fill.getAveragePrice(), fill.getTickSize());
 
         TradeContext context = new TradeContext(
                 fill.getOrderId(), fill.getAveragePrice(), breakeven,
@@ -117,11 +131,7 @@ public class TradeMonitor implements TelegramCommandListener {
 
         log.info("Tracking new trade: orderId={} instrument={} entryPrice={} breakeven={} cost={}",
                 fill.getOrderId(), fill.getInstrumentKey(), fill.getAveragePrice(), breakeven, cost);
-        notifier.send(String.format(
-                "%s: now tracking (entry=%.2f, qty=%d, orderId=%s)%nbreakeven %.2f — %s costs %.2f on %.2f invested (%.3f%%)",
-                fill.getInstrumentKey(), fill.getAveragePrice(), fill.getFilledQuantity(), fill.getOrderId(),
-                breakeven, cost.isEstimated() ? "estimated" : "broker-quoted",
-                cost.getTotalCharges(), cost.getInvestedAmount(), cost.getFractionOfInvested() * 100));
+        notifier.send(buildTrackingMessage(fill, cost, breakeven, ladderForTrade));
 
         feedFactory.apply(fill).start((price, timestamp) -> onPrice(trade, price));
     }
@@ -141,8 +151,8 @@ public class TradeMonitor implements TelegramCommandListener {
             trade.engine.forceExit(trade.context, currentPrice);
             log.info("Stop-loss hit: orderId={} instrument={} price={} stopLoss={}",
                     trade.fill.getOrderId(), trade.fill.getInstrumentKey(), currentPrice, stopLoss);
-            notifier.send(String.format("%s: stop-loss hit at %.2f (sl=%.2f) — trade closed",
-                    trade.fill.getInstrumentKey(), currentPrice, stopLoss));
+            notifier.send(String.format("%s: stop-loss hit at %.2f (sl=%.2f) — trade closed%n%s",
+                    trade.fill.getInstrumentKey(), currentPrice, stopLoss, settlement(trade, currentPrice)));
             return;
         }
 
@@ -179,7 +189,7 @@ public class TradeMonitor implements TelegramCommandListener {
         }
 
         onFill(new TradeFillEvent("telegram-" + UUID.randomUUID(),
-                request.getInstrumentKey(), request.getPrice(), request.getQuantity()));
+                request.getInstrumentKey(), request.getPrice(), request.getQuantity(), request.getTickSize()));
     }
 
     @Override
@@ -217,11 +227,11 @@ public class TradeMonitor implements TelegramCommandListener {
         LinkedHashMap<String, String> choices = new LinkedHashMap<>();
         for (MilestoneLadder candidate : MilestoneSets.available()) {
             String label = MilestoneSets.describe(candidate)
-                    + (candidate.getName().equals(activeLadder.getName()) ? "  ✓ active" : "");
+                    + (candidate.getName().equals(activeLadder.get().getName()) ? "  ✓ active" : "");
             choices.put(label, TelegramCommandHandler.LADDER_CALLBACK_PREFIX + candidate.getName());
         }
 
-        notifier.sendChoices("Milestone set for the next trade (active: " + activeLadder.getName() + ")", choices);
+        notifier.sendChoices("Milestone set for the next trade (active: " + activeLadder.get().getName() + ")", choices);
     }
 
     @Override
@@ -246,12 +256,12 @@ public class TradeMonitor implements TelegramCommandListener {
         }
 
         MilestoneLadder ladder = selected.get();
-        if (ladder.getName().equals(activeLadder.getName())) {
+        if (ladder.getName().equals(activeLadder.get().getName())) {
             notifier.send(MilestoneSets.describe(ladder) + " — already active");
             return;
         }
 
-        activeLadder = ladder;
+        activeLadder.set(ladder);
         log.info("Active milestone set changed to {}", ladder.getName());
         notifier.send("Milestone set is now " + MilestoneSets.describe(ladder));
     }
@@ -275,8 +285,96 @@ public class TradeMonitor implements TelegramCommandListener {
         trade.engine.forceExit(trade.context, exitPrice);
         log.info("Force exit: orderId={} instrument={} price={}",
                 trade.fill.getOrderId(), trade.fill.getInstrumentKey(), exitPrice);
-        notifier.send(String.format("%s: force-exited at %.2f (orderId=%s)",
-                trade.fill.getInstrumentKey(), exitPrice, trade.fill.getOrderId()));
+        notifier.send(String.format("%s: force-exited at %.2f (orderId=%s)%n%s",
+                trade.fill.getInstrumentKey(), exitPrice, trade.fill.getOrderId(), settlement(trade, exitPrice)));
+    }
+
+    /**
+     * Final P&L with charges recomputed at the real exit price, replacing
+     * the entry-time estimate.
+     * <p>
+     * This is where the estimate's one weakness is corrected: sell-side
+     * charges scale with the exit value, so quoting them at entry
+     * understates by roughly Rs 19 on a +21% exit and Rs 89 on a +100% one.
+     * Small against the profit itself, but there is no reason for the
+     * closing number to carry it.
+     */
+    private String settlement(ActiveTrade trade, double exitPrice) {
+
+        TradeFillEvent fill = trade.fill;
+        TradeCost settled = chargesService.settledCost(
+                fill.getInstrumentKey(), fill.getAveragePrice(), exitPrice, fill.getFilledQuantity());
+
+        double gross = (exitPrice - fill.getAveragePrice()) * fill.getFilledQuantity();
+        double net = settled.netProfitAt(fill.getAveragePrice(), exitPrice, fill.getFilledQuantity());
+        double estimatedCharges = trade.cost.getTotalCharges();
+
+        return String.format(
+                "settled: gross %+.2f, charges %.2f (estimated %.2f at entry), net %+.2f",
+                gross, settled.getTotalCharges(), estimatedCharges, net);
+    }
+
+    /** Costs above this share of deployed capital are worth calling out. */
+    private static final double COSTLY_TRADE_FRACTION = 0.02;
+
+    /**
+     * Everything here is explicitly an estimate: the sell side is priced at
+     * the entry price because the exit price is not yet known. The settled
+     * figure arrives when the trade closes.
+     * <p>
+     * The warnings that follow all bite hardest on cheap expiry-day
+     * premiums, where the tick is a large share of the price and flat
+     * brokerage dominates -- exactly when the numbers are least intuitive.
+     */
+    private String buildTrackingMessage(TradeFillEvent fill, TradeCost cost, double breakeven, MilestoneLadder ladder) {
+
+        StringBuilder message = new StringBuilder(String.format(
+                "%s: now tracking (entry=%.2f, qty=%d, orderId=%s)%n"
+                        + "estimated breakeven %.2f — %s costs %.2f on %.2f invested (%.3f%%)",
+                fill.getInstrumentKey(), fill.getAveragePrice(), fill.getFilledQuantity(), fill.getOrderId(),
+                breakeven, cost.isEstimated() ? "modelled" : "broker-quoted at entry price",
+                cost.getTotalCharges(), cost.getInvestedAmount(), cost.getFractionOfInvested() * 100));
+
+        String comparison = compareWithModel(fill, cost);
+        if (comparison != null) {
+            message.append(System.lineSeparator()).append(comparison);
+        }
+
+        if (cost.getFractionOfInvested() > COSTLY_TRADE_FRACTION) {
+            message.append(String.format("%n⚠ costs are %.2f%% of deployed capital — this trade needs a large move just to break even",
+                    cost.getFractionOfInvested() * 100));
+        }
+
+        double tick = fill.getTickSize();
+        if (tick > 0) {
+            double tickPercent = tick / fill.getAveragePrice() * 100;
+            double firstRung = ladder.allThresholdsPercent()[0];
+            if (tickPercent >= firstRung) {
+                message.append(String.format(
+                        "%n⚠ one tick (%.2f) is %.1f%% of this premium, coarser than the first ladder rung (%.1f%%) — early milestones will fire together",
+                        tick, tickPercent, firstRung));
+            }
+        }
+
+        return message.toString();
+    }
+
+    /**
+     * Runs the built-in model alongside the broker's quote so the model can
+     * be checked against reality trade by trade. Skipped when the primary
+     * figure is already modelled, since it would only be compared to itself.
+     */
+    private String compareWithModel(TradeFillEvent fill, TradeCost actual) {
+
+        if (actual.isEstimated()) {
+            return null;
+        }
+
+        TradeCost modelled = referenceCharges.roundTripCost(
+                fill.getInstrumentKey(), fill.getAveragePrice(), fill.getFilledQuantity());
+
+        return String.format("model says %.2f (%+.2f vs broker)",
+                modelled.getTotalCharges(), modelled.getTotalCharges() - actual.getTotalCharges());
     }
 
     /**

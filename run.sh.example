@@ -25,6 +25,14 @@ export TELEGRAM_CHAT_ID="your-telegram-chat-id-here"
 # rather than being split across several orders.
 # export CAPITAL_PER_TRADE="50000"
 
+# Rupees you are willing to lose if the hard stop is hit. Optional but
+# strongly recommended: without it, position size is capped by capital
+# alone, so a stopped-out OPTIONS trade loses CAPITAL_PER_TRADE x 40%
+# (Rs 20,000 on Rs 50,000). With it, the position is sized so the stop
+# costs this much instead -- a wide stop on a smaller position, rather
+# than a narrow stop that ordinary noise would trip.
+# export MAX_RISK_PER_TRADE="5000"
+
 # Newest by modification time, not first alphabetically: after a version
 # bump target/ can hold jars from several versions (plus the shade
 # plugin's -shaded copy), and picking alphabetically silently runs a
