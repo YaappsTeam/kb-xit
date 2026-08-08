@@ -34,28 +34,29 @@ class MilestoneSetsTest {
         String description = MilestoneSets.describe(MilestoneLadder.optionsLadder());
 
         assertTrue(description.contains("OPTIONS"));
-        assertTrue(description.contains("1.3%"));
+        assertTrue(description.contains("1%"));
         assertTrue(description.contains("233%"));
         assertTrue(description.contains("40%"));
     }
 
-    /** Fractional rungs must not be rounded away: 0.5% is not "0%". */
+    /** Fractional thresholds must not be rounded away to whole numbers. */
     @Test
     void descriptionShouldKeepFractionalThresholds() {
-
-        assertTrue(MilestoneSets.describe(MilestoneLadder.equityLadder()).contains("0.5%"));
 
         assertEquals("55", MilestoneSets.trim(55.0));
         assertEquals("1.3", MilestoneSets.trim(1.3));
         assertEquals("0.5", MilestoneSets.trim(0.5));
     }
 
+    /**
+     * Both ladders open at 1%: the user's stated minimum target, measured
+     * net of round-trip costs rather than gross.
+     */
     @Test
-    void optionLadderShouldOpenAtTheEarlySignalRung() {
-
-        double[] thresholds = MilestoneLadder.optionsLadder().allThresholdsPercent();
-
-        assertEquals(1.3, thresholds[0]);
+    void bothLaddersShouldOpenAtOnePercentNet() {
+        for (MilestoneLadder ladder : MilestoneSets.available()) {
+            assertEquals(1.0, ladder.allThresholdsPercent()[0], ladder.getName());
+        }
     }
 
     /**
@@ -63,12 +64,12 @@ class MilestoneSetsTest {
      * transition or an ownership lock down with it.
      */
     @Test
-    void optionLadderOpeningRungShouldCarryNoPhaseOrLock() {
-
-        Milestone first = MilestoneLadder.optionsLadder().getMilestones().get(0);
-
-        assertFalse(first.hasPhaseTransition());
-        assertFalse(first.hasOwnershipLock());
+    void openingRungShouldCarryNoPhaseOrLock() {
+        for (MilestoneLadder ladder : MilestoneSets.available()) {
+            Milestone first = ladder.getMilestones().get(0);
+            assertFalse(first.hasPhaseTransition(), ladder.getName());
+            assertFalse(first.hasOwnershipLock(), ladder.getName());
+        }
     }
 
     /**
@@ -81,14 +82,20 @@ class MilestoneSetsTest {
                 > MilestoneLadder.equityLadder().getHardStopPercent());
     }
 
+    /**
+     * Options need more headroom than equities: a premium swings further,
+     * so both phases and the hard stop sit higher.
+     */
     @Test
-    void optionLadderShouldStartWhereTheEquityLadderEnds() {
+    void optionLadderShouldPlacePhasesHigherThanEquities() {
 
-        double[] equity = MilestoneLadder.equityLadder().allThresholdsPercent();
-        double[] options = MilestoneLadder.optionsLadder().allThresholdsPercent();
+        MilestoneLadder equity = MilestoneLadder.equityLadder();
+        MilestoneLadder options = MilestoneLadder.optionsLadder();
 
-        assertEquals(equity[equity.length - 1], options[options.length - 4]);
-        assertTrue(options[0] > equity[0]);
+        assertTrue(options.phaseTriggerFraction(Phase.PHASE_2) > equity.phaseTriggerFraction(Phase.PHASE_2));
+        assertTrue(options.phaseTriggerFraction(Phase.PHASE_3) > equity.phaseTriggerFraction(Phase.PHASE_3));
+        assertTrue(options.allThresholdsPercent()[options.allThresholdsPercent().length - 1]
+                > equity.allThresholdsPercent()[equity.allThresholdsPercent().length - 1]);
     }
 
     @Test

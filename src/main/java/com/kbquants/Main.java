@@ -7,7 +7,12 @@ import com.kbquants.instrument.PositionSizer;
 import com.kbquants.live.TradeMonitor;
 import com.kbquants.live.UpstoxDataCredentials;
 import com.kbquants.live.UpstoxMarketDataFeed;
+import com.kbquants.domain.ActiveLadder;
+import com.kbquants.domain.MilestoneLadder;
+import com.kbquants.live.UpstoxChargesService;
 import com.kbquants.live.UpstoxQuoteService;
+import com.kbquants.session.ChargesService;
+import com.kbquants.session.EstimatedChargesService;
 import com.kbquants.notification.TelegramCommandHandler;
 import com.kbquants.notification.TelegramCredentials;
 import com.kbquants.notification.TelegramNotifier;
@@ -74,18 +79,25 @@ public class Main {
         // at startup rather than on the first /buy, mid-trading-session.
         Function<TradeFillEvent, MarketDataFeed> feedFactory;
         BuyRequestResolver buyRequestResolver;
+        ChargesService chargesService;
+
+        // Shared between the monitor and position sizing so that switching
+        // milestone sets moves the hard stop for both at once.
+        ActiveLadder activeLadder = new ActiveLadder(MilestoneLadder.defaultLadder());
 
         if (liveData) {
             UpstoxDataCredentials dataCredentials = UpstoxDataCredentials.fromEnv();
             feedFactory = liveFeedFactory(dataCredentials);
-            buyRequestResolver = instrumentAwareResolver(dataCredentials);
+            buyRequestResolver = instrumentAwareResolver(dataCredentials, activeLadder);
+            chargesService = new UpstoxChargesService(dataCredentials);
         } else {
             feedFactory = Main::simulatedFeed;
             buyRequestResolver = new LiteralBuyRequestResolver();
+            chargesService = new EstimatedChargesService();
         }
 
-        TradeMonitor tradeMonitor = new TradeMonitor(
-                new NoOpOrderFillFeed(), feedFactory, notifier, buyRequestResolver);
+        TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
+                buyRequestResolver, activeLadder, chargesService);
 
         TelegramCommandHandler commandHandler = new TelegramCommandHandler(credentials, tradeMonitor);
         commandHandler.start();
@@ -112,7 +124,8 @@ public class Main {
      * via /refresh) and CAPITAL_PER_TRADE, which is what a bare
      * {@code /buy <symbol>} sizes against.
      */
-    private static BuyRequestResolver instrumentAwareResolver(UpstoxDataCredentials dataCredentials) throws IOException {
+    private static BuyRequestResolver instrumentAwareResolver(UpstoxDataCredentials dataCredentials,
+                                                              ActiveLadder activeLadder) throws IOException {
 
         String capital = System.getenv("CAPITAL_PER_TRADE");
         if (capital == null || capital.isBlank()) {
@@ -120,10 +133,21 @@ public class Main {
                     "Missing required environment variable: CAPITAL_PER_TRADE (used to size a bare /buy <symbol>)");
         }
 
+        // Optional second ceiling. Where both apply the smaller wins, so
+        // capital caps exposure and risk caps the loss -- a wide stop on a
+        // small position rather than a narrow stop that noise would trip.
+        String maxRisk = System.getenv("MAX_RISK_PER_TRADE");
+        double maxRiskPerTrade = maxRisk == null || maxRisk.isBlank() ? 0 : Double.parseDouble(maxRisk);
+        if (maxRiskPerTrade <= 0) {
+            log.warn("MAX_RISK_PER_TRADE is not set — position size is capped by capital alone, so a hard-stop "
+                    + "loss is CAPITAL_PER_TRADE x the set's hard stop ({}% on OPTIONS).",
+                    (int) (MilestoneLadder.optionsLadder().getHardStopPercent() * 100));
+        }
+
         return new InstrumentAwareBuyRequestResolver(
                 InstrumentCatalog.loadFrom(new InstrumentMasterLoader()),
                 new UpstoxQuoteService(dataCredentials),
-                new PositionSizer(Double.parseDouble(capital)));
+                new PositionSizer(Double.parseDouble(capital), maxRiskPerTrade, activeLadder));
     }
 
     private static MarketDataFeed simulatedFeed(TradeFillEvent fill) {

@@ -82,8 +82,9 @@ class ExitEngineTest {
         engine.onPriceUpdate(113.0, context);
         engine.onPriceUpdate(134.0, context);
 
-        // +34% milestone -> 70%, base=101, openProfit=33, 70%=23.1, SL=124.1
-        assertEquals(124.1, context.getCurrentStopLoss(), 0.0001);
+        // net profit from base = (134-101)/101 = 32.67%, so the +21% rung
+        // applies -> 75%. openProfit = 33, 75% = 24.75, SL = 125.75
+        assertEquals(125.75, context.getCurrentStopLoss(), 0.0001);
     }
 
     @Test

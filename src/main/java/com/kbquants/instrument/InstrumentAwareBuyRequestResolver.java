@@ -123,7 +123,7 @@ public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolv
                 return BuyRequest.rejected("quantity must be positive, got " + quantity);
             }
             return BuyRequest.accepted(instrument.getInstrumentKey(), instrument.getTradingSymbol(),
-                    price, quantity, priceNote);
+                    price, quantity, tickSizeOf(instrument), priceNote);
         }
 
         PositionSizer.Result sized = sizer.size(instrument, price);
@@ -132,7 +132,15 @@ public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolv
         }
 
         return BuyRequest.accepted(instrument.getInstrumentKey(), instrument.getTradingSymbol(),
-                price, sized.getQuantity(), sizingNote(instrument, sized));
+                price, sized.getQuantity(), tickSizeOf(instrument), sizingNote(instrument, sized));
+    }
+
+    /**
+     * The instrument master carries tick size in paise; everything else in
+     * the system works in rupees.
+     */
+    private static double tickSizeOf(Instrument instrument) {
+        return instrument.getTickSize() > 0 ? instrument.getTickSize() / 100.0 : 0;
     }
 
     private static String sizingNote(Instrument instrument, PositionSizer.Result sized) {
@@ -147,9 +155,18 @@ public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolv
                         sized.getLots(), sized.getLots() == 1 ? "" : "s",
                         lotSize, sized.getQuantity(), sized.getDeployedCapital());
 
+        if (sized.getRiskAtHardStop() > 0) {
+            note += String.format(", risking %.0f at the stop", sized.getRiskAtHardStop());
+        }
+
+        if (sized.isLimitedByRisk()) {
+            note += " (size set by max risk, not capital)";
+        }
+
         if (sized.isCappedByFreezeLimit()) {
-            note += String.format(" (capped at the %d-lot exchange freeze limit; not sliced into further orders)",
-                    instrument.maxLotsPerOrder());
+            note += String.format(
+                    " (capped at the %d-lot exchange freeze limit; only %.0f of your capital can be deployed in one order, and orders are not sliced)",
+                    instrument.maxLotsPerOrder(), sized.getDeployedCapital());
         }
         return note;
     }

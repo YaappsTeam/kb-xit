@@ -77,7 +77,7 @@ Now message your bot on Telegram:
 /buy NSE_EQ|INE848E01016 1500 10
 ```
 
-A simulated price feed starts at ₹1500 and random-walks from there. As it crosses profit milestones (0.5%, 1%, 2%, 3%, 5%, 8%, 13%, 21%, 34%, 55%) you'll get a notification for each; if it drops to the stop-loss, the trade auto-closes and you're notified. Send `/status` anytime to see open trades, or `/exit <orderId>` / `/exit all` to close manually.
+A simulated price feed starts at ₹1500 and random-walks from there. You will first be told when the trade clears breakeven (brokerage and taxes covered), then as it crosses each net profit milestone (1%, 2%, 3%, 5%, 8%, 13%, 21%, 34%, 55%); if it drops to the stop-loss, the trade auto-closes and you're notified. Send `/status` anytime to see open trades, or `/exit <orderId>` / `/exit all` to close manually.
 
 Stop the process with `Ctrl+C` — it shuts down the Telegram poller cleanly.
 
@@ -162,25 +162,91 @@ The trade-off: between refreshes, contracts listed since Wednesday won't resolve
 
 That forces a download regardless of schedule and takes effect on the next command. If it fails, the previous master stays loaded — stale beats none mid-session.
 
+## Costs and breakeven
+
+The primary goal is capital preservation, so **every percentage is net of costs**. A trade's breakeven is not its entry price — it's the price at which brokerage, STT, exchange transaction charges, GST and stamp duty are all covered.
+
+Costs come from Upstox's own brokerage calculator (reachable with the Analytics Token, no static IP), one call per side at `/buy`. Real quotes:
+
+| Position | Invested | Round trip | % of invested |
+|---|---|---|---|
+| NIFTY 25000 CE, 13 lots | ₹46,728 | ₹157.87 | 0.338% |
+| NIFTY 25000 CE, **1 lot** | ₹3,594 | ₹55.72 | **1.550%** |
+| ACC equity, 36 sh | ₹49,061 | ₹64.62 | 0.132% |
+
+**The cost percentage is not a constant** — it swings 12× with position size, because ₹20 brokerage per order is flat while everything else is proportional. That's why it's computed per trade rather than assumed.
+
+It also matters more than it looks. On that 1-lot position, a *gross* gain of 1% is a **net loss**: costs are 1.55%. Measuring from entry, the bot would have announced a profit on a losing trade. Measuring from breakeven, it stays quiet until you're genuinely ahead.
+
+Concretely, `basePrice` becomes the cost-inclusive breakeven, and everything measures from it — phase transitions, milestone notifications, and ownership locks. So PHASE_2 ("base capital protection") now means your capital is genuinely safe, and "lock 30% of open profit" locks 30% of money you'd actually keep.
+
+Two things to expect:
+
+- **These figures read lower than Upstox's own P&L screen**, which shows gross. Same position, two numbers; ours is the one you take home.
+- **Everything before exit is an estimate**, and labelled as such. Sell-side charges depend on the exit price, which isn't known at entry, so they're quoted at the entry price. Near breakeven that's worth ₹0.31 on a ₹46.7k position, but it drifts with distance: ₹18.84 at a +21% exit, ₹89.70 at +100%.
+
+**When the trade closes, charges are recomputed at the real exit price** and the settled figure is reported — gross, actual charges, the entry-time estimate for comparison, and net:
+
+```
+settled: gross +25704.90, charges 207.21 (estimated 157.87 at entry), net +25497.69
+```
+
+If the charges call fails, a built-in model takes over and the figure is labelled `modelled` rather than `broker-quoted`. It's calibrated against real quotes and separates derivatives from equity (options genuinely cost several times intraday equity): within ₹0.09 of the broker on the ACC position above. The model also runs **alongside** every broker quote, reporting the delta, so it stays honest over time.
+
+### Risk-based position sizing
+
+`CAPITAL_PER_TRADE` caps exposure; it does **not** cap losses. At ₹50,000 with the OPTIONS hard stop of 40%, a stopped-out trade loses **₹18,813** — verified, not estimated.
+
+Tightening the stop is the wrong fix: 40% of an option premium is ordinary intraday noise, and at 20% you'd be stopped out of most trades that go on to work. Rupee risk is `stop% × invested`, so the lever is size, not stop width. Set `MAX_RISK_PER_TRADE` and the position is sized so hitting the stop costs that much:
+
+```
+lots = min( capital / lotCost , maxRisk / (lotCost × hardStop%) )   then capped at the freeze limit
+```
+
+| `MAX_RISK_PER_TRADE` | Lots | Deployed | Loss at the stop |
+|---|---|---|---|
+| unset | 13 | ₹46,729 | ₹18,813 |
+| ₹10,000 | 6 | ₹21,567 | ₹8,627 |
+| ₹5,000 | 3 | ₹10,784 | ₹4,313 |
+
+The hard stop comes from the **active milestone set**, so switching sets re-sizes accordingly.
+
+### Expiry day and cheap premiums
+
+All NIFTY option contracts have lot 65, freeze 1,755 and a ₹0.05 tick — so **27 lots per order**, every strike. Three things change as premiums get cheap:
+
+| Premium | Max deployable (27 lots) | 1 tick | Round-trip cost | Real breakeven |
+|---|---|---|---|---|
+| ₹55.30 | ₹97,052 | 0.1% | 0.29% | +0.36% |
+| ₹5.00 | ₹8,775 | 1.0% | 0.77% | +1.00% |
+| ₹1.00 | ₹1,755 | 5.0% | 2.93% | **+5.00%** |
+| ₹0.50 | ₹878 | 10.0% | 5.62% | **+10.00%** |
+
+1. **The freeze limit binds before your capital does.** At ₹1 premium, 27 lots is ₹1,755 — you cannot deploy ₹50,000 in one order, and orders aren't sliced.
+2. **One tick becomes a large percentage**, so breakeven has to be **rounded up to a tradable price**. At ₹1 the computed breakeven is ₹1.0293, which nobody can sell at; the real one is ₹1.05, making breakeven +5% rather than +2.93%.
+3. **Costs stop being a rounding error** — 2.93% of deployed at ₹1, 5.62% at ₹0.50.
+
+`/buy` warns rather than refuses in each case: on expiry day a cheap lottery ticket may be exactly what you intend, but you'll be told when the freeze cap is binding, when costs exceed 2% of deployed, and when one tick is coarser than the first ladder rung (which makes the early milestones fire together).
+
 ## Milestone sets
 
-An option premium moves roughly an order of magnitude further than its underlying, so one milestone ladder cannot serve both. Send `/ladder` and the bot replies with the available sets as tappable buttons; the active one is marked.
+An option premium moves much further than an equity price, so one ladder cannot serve both. Send `/ladder` and the bot replies with the available sets as tappable buttons; the active one is marked.
 
 | | EQUITY | OPTIONS |
 |---|---|---|
-| Rungs | 0.5, 1, 2, 3, 5, 8, 13, 21, 34, 55% | 1.3, 5, 8, 13, 21, 34, 55, 89, 144, 233% |
-| PHASE_2 (breakeven) | 5% | 21% |
-| PHASE_3 | 13% | 55% |
-| Ownership locks | 13/21/34/55 → 30/50/70/85% | 55/89/144/233 → 30/50/70/85% |
+| Rungs (net of costs) | 1, 2, 3, 5, 8, 13, 21, 34, 55% | 1, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233% |
+| PHASE_2 (capital safe) | 2% | 8% |
+| PHASE_3 + locking starts | 5% | 21% |
+| Ownership locks | 5/8/13/21/34/55 → 30/50/65/75/85/90% | 21/34/55/89/144/233 → 30/50/65/75/85/90% |
 | Hard stop | 20% | 40% |
 
-The **hard stop moves with the set**, which is the point: 20% below entry is a disaster stop on an equity and a routine wiggle on an option premium — left at 20%, nearly every option trade would stop out on noise.
+Both ladders open at **1% net** — your minimum worthwhile target, after costs. Before that, the only event is the breakeven notification.
 
-Above 5% the option rungs are the same Fibonacci sequence as the equity ladder shifted up four places. For a weekly NIFTY ATM option (delta ~0.5) they correspond to underlying moves of roughly 0.34% at PHASE_2 and 0.90% at PHASE_3.
+The **hard stop moves with the set**: 20% below entry is a disaster stop on an equity and a routine wiggle on an option premium, so left at 20% nearly every option trade would stop out on noise.
 
-The **1.3% opening rung** sits below that sequence as an early "this is working" ping — on an ATM premium it's about a 0.02% move in the underlying, which is inside the noise. It carries no phase transition and no ownership lock, so it only ever notifies; nothing about your stop-loss changes when it fires.
+PHASE_2 sits higher for options (8% vs 2%) for the same reason — it ratchets the stop to breakeven, and placing that too early flat-stops trades that were about to work. The first ownership lock always coincides exactly with PHASE_3; a gap between them would be a dead zone where you're in PHASE_3 with the stop parked at breakeven.
 
-**These are reasoned starting points, not values derived from data.** They assume ATM and a multi-day expiry; further out of the money the same rungs trigger on about half the underlying move, and on expiry day gamma fires the early ones within minutes. Run paper mode on live data and move the rungs to match what you actually see.
+**These are reasoned starting points, not values derived from data.** Run paper mode on live data and move the rungs to match what you actually see.
 
 Selection rules:
 
@@ -220,7 +286,7 @@ Selection rules:
 ## Running tests
 
 ```bash
-mvn test              # full suite (202 tests)
+mvn test              # full suite (229 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 

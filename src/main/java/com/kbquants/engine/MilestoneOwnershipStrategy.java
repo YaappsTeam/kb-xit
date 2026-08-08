@@ -25,15 +25,16 @@ public class MilestoneOwnershipStrategy implements OwnershipStrategy {
 
         if (context.getCurrentPhase() != Phase.PHASE_3) return;
 
-        double entry = context.getEntryPrice();
         double base = context.getBasePrice();
 
-        double profitFromEntryPercent = (currentPrice - entry) / entry;
+        // Measured from basePrice (cost-inclusive breakeven) so a lock of
+        // "30% of open profit" locks 30% of money actually kept.
+        double netProfitPercent = (currentPrice - base) / base;
 
         double applicableOwnership = 0.0;
 
         for (Map.Entry<Double, Double> milestone : milestoneOwnershipMap.entrySet()) {
-            if (profitFromEntryPercent >= milestone.getKey()) {
+            if (netProfitPercent >= milestone.getKey()) {
                 applicableOwnership = milestone.getValue();
             } else break;
         }

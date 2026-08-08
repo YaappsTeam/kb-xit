@@ -53,20 +53,20 @@ public final class MilestoneLadder {
 
     /**
      * Tuned for equities, where a 1% move is a real move and 20% against
-     * you is a disaster stop.
+     * you is a disaster stop. Round-trip costs run about 0.13% of capital
+     * on a Rs 49k position, so the 1% opening rung clears them comfortably.
      */
     public static MilestoneLadder equityLadder() {
         return new MilestoneLadder("EQUITY", List.of(
-                new Milestone(0.5, null, 0.0),
                 new Milestone(1.0, null, 0.0),
-                new Milestone(2.0, null, 0.0),
+                new Milestone(2.0, Phase.PHASE_2, 0.0),
                 new Milestone(3.0, null, 0.0),
-                new Milestone(5.0, Phase.PHASE_2, 0.0),
-                new Milestone(8.0, null, 0.0),
-                new Milestone(13.0, Phase.PHASE_3, 0.30),
-                new Milestone(21.0, null, 0.50),
-                new Milestone(34.0, null, 0.70),
-                new Milestone(55.0, null, 0.85)
+                new Milestone(5.0, Phase.PHASE_3, 0.30),
+                new Milestone(8.0, null, 0.50),
+                new Milestone(13.0, null, 0.65),
+                new Milestone(21.0, null, 0.75),
+                new Milestone(34.0, null, 0.85),
+                new Milestone(55.0, null, 0.90)
         ), 0.20);
     }
 
@@ -76,34 +76,34 @@ public final class MilestoneLadder {
      * equity ladder, shifted up four places so it starts where that one
      * ends.
      * <p>
-     * For a weekly NIFTY ATM option (delta ~0.5) these correspond to
-     * underlying moves of roughly 0.34% at PHASE_2 and 0.90% at PHASE_3.
-     * The hard stop is 40% rather than 20% because 20% of a premium is a
-     * routine intraday wiggle and would stop out nearly every trade.
+     * All percentages are of the premium, which is the same thing as a
+     * percentage of money invested since quantity is constant across the
+     * round trip -- and they are measured from the cost-inclusive
+     * breakeven, so every rung is net profit.
      * <p>
-     * The 1.3% opening rung sits deliberately below that sequence, as an
-     * early "this is working" signal rather than a profit-locking point --
-     * on an ATM premium it is about a 0.02% move in the underlying, which
-     * is inside the noise. It carries no phase transition and no ownership
-     * lock, so it only ever notifies.
+     * The hard stop is 40% rather than the equity 20% because 20% of a
+     * premium is a routine intraday wiggle and would stop out nearly every
+     * trade. PHASE_2 sits at 8% for the same reason: it ratchets the stop
+     * to breakeven, and placing that any earlier would flat-stop trades
+     * that were about to work.
      * <p>
-     * These are reasoned starting points, not values derived from data --
-     * they assume ATM and a multi-day expiry. Deeper out of the money the
-     * same rungs trigger on roughly half the underlying move, and on
-     * expiry day gamma makes the early rungs fire in minutes.
+     * These are reasoned starting points, not values derived from data.
+     * The upper rungs need a large move to reach, so on a typical scalp
+     * expect the first three or four to do the work.
      */
     public static MilestoneLadder optionsLadder() {
         return new MilestoneLadder("OPTIONS", List.of(
-                new Milestone(1.3, null, 0.0),
+                new Milestone(1.0, null, 0.0),
+                new Milestone(3.0, null, 0.0),
                 new Milestone(5.0, null, 0.0),
-                new Milestone(8.0, null, 0.0),
+                new Milestone(8.0, Phase.PHASE_2, 0.0),
                 new Milestone(13.0, null, 0.0),
-                new Milestone(21.0, Phase.PHASE_2, 0.0),
-                new Milestone(34.0, null, 0.0),
-                new Milestone(55.0, Phase.PHASE_3, 0.30),
-                new Milestone(89.0, null, 0.50),
-                new Milestone(144.0, null, 0.70),
-                new Milestone(233.0, null, 0.85)
+                new Milestone(21.0, Phase.PHASE_3, 0.30),
+                new Milestone(34.0, null, 0.50),
+                new Milestone(55.0, null, 0.65),
+                new Milestone(89.0, null, 0.75),
+                new Milestone(144.0, null, 0.85),
+                new Milestone(233.0, null, 0.90)
         ), 0.40);
     }
 

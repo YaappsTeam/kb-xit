@@ -17,24 +17,34 @@ class MilestoneLadderTest {
         MilestoneLadder ladder = MilestoneLadder.defaultLadder();
 
         assertArrayEquals(
-                new double[]{0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0},
+                new double[]{1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0},
                 ladder.allThresholdsPercent());
     }
 
+    /**
+     * Every threshold is net profit above the cost-inclusive breakeven, so
+     * the ladder opens at 1% rather than 0.5%: below that, round-trip costs
+     * are a meaningful share of the gain.
+     */
     @Test
-    void shouldExposePhase2TriggerAtFivePercent() {
-
-        MilestoneLadder ladder = MilestoneLadder.defaultLadder();
-
-        assertEquals(0.05, ladder.phaseTriggerFraction(Phase.PHASE_2), 0.0001);
+    void shouldOpenAtOnePercentNetOfCosts() {
+        assertEquals(1.0, MilestoneLadder.defaultLadder().allThresholdsPercent()[0]);
     }
 
     @Test
-    void shouldExposePhase3TriggerAtThirteenPercent() {
+    void shouldExposePhase2TriggerAtTwoPercent() {
 
         MilestoneLadder ladder = MilestoneLadder.defaultLadder();
 
-        assertEquals(0.13, ladder.phaseTriggerFraction(Phase.PHASE_3), 0.0001);
+        assertEquals(0.02, ladder.phaseTriggerFraction(Phase.PHASE_2), 0.0001);
+    }
+
+    @Test
+    void shouldExposePhase3TriggerAtFivePercent() {
+
+        MilestoneLadder ladder = MilestoneLadder.defaultLadder();
+
+        assertEquals(0.05, ladder.phaseTriggerFraction(Phase.PHASE_3), 0.0001);
     }
 
     @Test
@@ -52,11 +62,24 @@ class MilestoneLadderTest {
 
         Map<Double, Double> locks = ladder.ownershipLockMap();
 
-        assertEquals(4, locks.size());
-        assertEquals(0.30, locks.get(0.13));
-        assertEquals(0.50, locks.get(0.21));
-        assertEquals(0.70, locks.get(0.34));
-        assertEquals(0.85, locks.get(0.55));
+        assertEquals(6, locks.size());
+        assertEquals(0.30, locks.get(0.05));
+        assertEquals(0.50, locks.get(0.08));
+        assertEquals(0.65, locks.get(0.13));
+        assertEquals(0.75, locks.get(0.21));
+        assertEquals(0.85, locks.get(0.34));
+        assertEquals(0.90, locks.get(0.55));
+    }
+
+    /** Locking must begin exactly where PHASE_3 does, or the gap between
+     *  them is a dead zone: in PHASE_3 with no applicable lock, the stop
+     *  would sit at breakeven while profit ran. */
+    @Test
+    void firstOwnershipLockShouldCoincideWithPhase3() {
+        for (MilestoneLadder ladder : MilestoneSets.available()) {
+            double firstLock = ladder.ownershipLockMap().keySet().iterator().next();
+            assertEquals(ladder.phaseTriggerFraction(Phase.PHASE_3), firstLock, 0.0001, ladder.getName());
+        }
     }
 
     @Test

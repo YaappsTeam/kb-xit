@@ -28,31 +28,51 @@ class PhaseManagerTest {
         );
     }
 
-    @Test
-    void shouldMoveFromPhase1ToPhase2WhenPriceReachesFivePercent() {
+    // base = 101, so PHASE_2 triggers at 101 x 1.02 = 103.02
+    // and PHASE_3 at 101 x 1.05 = 106.05.
 
-        phaseManager.evaluatePhaseTransition(105.0, context);
+    @Test
+    void shouldMoveFromPhase1ToPhase2AtTwoPercentAboveBase() {
+
+        phaseManager.evaluatePhaseTransition(103.02, context);
 
         assertEquals(Phase.PHASE_2, context.getCurrentPhase());
     }
 
     @Test
-    void shouldRemainInPhase1IfBelowFivePercent() {
+    void shouldRemainInPhase1BelowTwoPercentAboveBase() {
 
-        phaseManager.evaluatePhaseTransition(104.9, context);
+        phaseManager.evaluatePhaseTransition(103.0, context);
 
         assertEquals(Phase.PHASE_1, context.getCurrentPhase());
     }
 
     @Test
-    void shouldMoveFromPhase2ToPhase3WhenPriceReachesThirteenPercent() {
+    void shouldMoveFromPhase2ToPhase3AtFivePercentAboveBase() {
 
-        phaseManager.evaluatePhaseTransition(105.0, context);
+        phaseManager.evaluatePhaseTransition(103.02, context);
         assertEquals(Phase.PHASE_2, context.getCurrentPhase());
 
-        phaseManager.evaluatePhaseTransition(113.0, context);
+        phaseManager.evaluatePhaseTransition(106.10, context);
 
         assertEquals(Phase.PHASE_3, context.getCurrentPhase());
+    }
+
+    /**
+     * Thresholds measure from basePrice, not entryPrice. With costs heavy
+     * enough to push breakeven to 110, a price of 105 is still a net loss
+     * and must not advance the phase -- under entry-anchored thresholds it
+     * would have counted as +5%.
+     */
+    @Test
+    void shouldMeasureFromBreakevenNotEntry() {
+
+        TradeContext costly = new TradeContext(
+                "T2", 100.0, 110.0, 1, ExitModel.MODERATE, OwnershipMode.CONTINUOUS);
+
+        phaseManager.evaluatePhaseTransition(105.0, costly);
+
+        assertEquals(Phase.PHASE_1, costly.getCurrentPhase());
     }
 
     @Test
