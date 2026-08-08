@@ -3,7 +3,7 @@ package com.kbquants.session;
 import java.util.List;
 
 /**
- * Turns the raw arguments of a /buy command into a {@link TrackRequest}.
+ * Turns the raw arguments of a /track command into a {@link TrackRequest}.
  * <p>
  * Implementations differ in how much they are allowed to infer: with an
  * instrument master and a price source available, a bare symbol is enough;

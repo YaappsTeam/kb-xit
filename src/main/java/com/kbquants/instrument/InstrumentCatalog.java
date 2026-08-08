@@ -11,7 +11,7 @@ import java.util.Objects;
  * <p>
  * The registry itself is immutable; this is the one mutable seam, and the
  * reference is volatile because a refresh runs on the Telegram poller
- * thread while /buy resolution reads it from wherever the command arrived.
+ * thread while /track resolution reads it from wherever the command arrived.
  * A refresh that fails leaves the previous registry in place -- a stale
  * instrument master is far better than none mid-session.
  */

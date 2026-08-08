@@ -3,7 +3,7 @@ package com.kbquants.session;
 import lombok.Getter;
 
 /**
- * The outcome of turning raw /buy arguments into something tradable:
+ * The outcome of turning raw /track arguments into something tradable:
  * either a fully resolved instrument key, entry price and quantity, or a
  * rejection carrying a message fit to send straight back to the user.
  * <p>

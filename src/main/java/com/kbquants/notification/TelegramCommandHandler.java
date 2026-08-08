@@ -18,7 +18,7 @@ import java.util.Objects;
 
 /**
  * Long-polls Telegram's getUpdates Bot API, parses each incoming message as
- * a command (/buy, /exit, /status), and dispatches it to a
+ * a command (/track, /exit, /status), and dispatches it to a
  * TelegramCommandListener. This is the inbound half of the Telegram control
  * plane -- TelegramNotifier is the outbound half.
  * <p>
