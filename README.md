@@ -162,6 +162,32 @@ The trade-off: between refreshes, contracts listed since Wednesday won't resolve
 
 That forces a download regardless of schedule and takes effect on the next command. If it fails, the previous master stays loaded — stale beats none mid-session.
 
+## Milestone sets
+
+An option premium moves roughly an order of magnitude further than its underlying, so one milestone ladder cannot serve both. Send `/ladder` and the bot replies with the available sets as tappable buttons; the active one is marked.
+
+| | EQUITY | OPTIONS |
+|---|---|---|
+| Rungs | 0.5, 1, 2, 3, 5, 8, 13, 21, 34, 55% | 1.3, 5, 8, 13, 21, 34, 55, 89, 144, 233% |
+| PHASE_2 (breakeven) | 5% | 21% |
+| PHASE_3 | 13% | 55% |
+| Ownership locks | 13/21/34/55 → 30/50/70/85% | 55/89/144/233 → 30/50/70/85% |
+| Hard stop | 20% | 40% |
+
+The **hard stop moves with the set**, which is the point: 20% below entry is a disaster stop on an equity and a routine wiggle on an option premium — left at 20%, nearly every option trade would stop out on noise.
+
+Above 5% the option rungs are the same Fibonacci sequence as the equity ladder shifted up four places. For a weekly NIFTY ATM option (delta ~0.5) they correspond to underlying moves of roughly 0.34% at PHASE_2 and 0.90% at PHASE_3.
+
+The **1.3% opening rung** sits below that sequence as an early "this is working" ping — on an ATM premium it's about a 0.02% move in the underlying, which is inside the noise. It carries no phase transition and no ownership lock, so it only ever notifies; nothing about your stop-loss changes when it fires.
+
+**These are reasoned starting points, not values derived from data.** They assume ATM and a multi-day expiry; further out of the money the same rungs trigger on about half the underlying move, and on expiry day gamma fires the early ones within minutes. Run paper mode on live data and move the rungs to match what you actually see.
+
+Selection rules:
+
+- **One set is active at a time**, and it applies to trades opened after you choose it.
+- **You cannot switch while a trade is open.** Open trades keep the set they were opened with, so switching mid-flight would make "active" mean something other than what is managing your position. Exit first, then choose.
+- Numbers live in `MilestoneLadder` — changing them is a code change, deliberately, since they encode trading intent worth reviewing in a diff. Only the *choice* is a runtime decision.
+
 ## Setting up your Telegram bot
 
 1. In Telegram, search for **`@BotFather`**, tap **Start**, send `/newbot`, and follow the prompts (display name, then a unique username ending in `bot`). It replies with your **bot token** — this is `TELEGRAM_BOT_TOKEN`.
@@ -173,6 +199,7 @@ That forces a download regardless of schedule and takes effect on the next comma
    exit - Force-exit a trade: /exit <orderId> or /exit all
    status - List active trades
    refresh - Re-fetch the instrument master now
+   ladder - Choose the active milestone set
    ```
    This makes the commands show up as autocomplete suggestions in the chat.
 
@@ -187,11 +214,13 @@ That forces a download regardless of schedule and takes effect on the next comma
 | `/exit all` | Force-exit every open trade |
 | `/status` | Report all open trades: instrument, entry, current price, phase, stop-loss |
 | `/refresh` | Re-fetch the instrument master now, instead of waiting for Wednesday |
+| `/ladder` | Show the milestone sets as buttons and pick one |
+| `/ladder <name>` | Select a set directly, skipping the buttons |
 
 ## Running tests
 
 ```bash
-mvn test              # full suite (172 tests)
+mvn test              # full suite (202 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 

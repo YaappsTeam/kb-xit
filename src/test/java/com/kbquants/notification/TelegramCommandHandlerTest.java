@@ -42,6 +42,16 @@ class TelegramCommandHandlerTest {
         public void onRefreshInstruments() {
             events.add("refresh");
         }
+
+        @Override
+        public void onLadderChoicesRequested() {
+            events.add("ladderChoices");
+        }
+
+        @Override
+        public void onLadderSelected(String setName) {
+            events.add("ladderSelected:" + setName);
+        }
     }
 
     @Test
@@ -138,6 +148,49 @@ class TelegramCommandHandlerTest {
         TelegramCommandHandler.dispatch("/refresh", listener);
 
         assertEquals(List.of("refresh"), listener.events);
+    }
+
+    @Test
+    void bareLadderCommandShouldAskForTheChoicesToBePushed() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/ladder", listener);
+
+        assertEquals(List.of("ladderChoices"), listener.events);
+    }
+
+    @Test
+    void ladderCommandWithNameShouldSelectDirectly() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/ladder OPTIONS", listener);
+
+        assertEquals(List.of("ladderSelected:OPTIONS"), listener.events);
+    }
+
+    /** A tapped inline-keyboard button arrives as a callback, not a message. */
+    @Test
+    void shouldDispatchLadderSelectionFromCallbackData() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatchCallback("ladder:OPTIONS", listener);
+
+        assertEquals(List.of("ladderSelected:OPTIONS"), listener.events);
+    }
+
+    @Test
+    void shouldIgnoreUnrecognizedCallbackData() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatchCallback("something:else", listener);
+        TelegramCommandHandler.dispatchCallback(null, listener);
+        TelegramCommandHandler.dispatchCallback("", listener);
+
+        assertTrue(listener.events.isEmpty());
     }
 
     @Test

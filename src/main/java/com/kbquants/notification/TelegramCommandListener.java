@@ -24,4 +24,10 @@ public interface TelegramCommandListener {
      * weekly refresh -- for picking up a contract listed since the last one.
      */
     void onRefreshInstruments();
+
+    /** Offer the available milestone sets for the user to choose between. */
+    void onLadderChoicesRequested();
+
+    /** Make the named milestone set the active one for subsequent trades. */
+    void onLadderSelected(String setName);
 }

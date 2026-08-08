@@ -5,6 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -28,6 +30,9 @@ public class TelegramCommandHandler {
 
     private static final String API_BASE = "https://api.telegram.org";
     private static final int LONG_POLL_TIMEOUT_SECONDS = 30;
+
+    /** Prefix on inline-keyboard callback tokens for milestone-set choices. */
+    public static final String LADDER_CALLBACK_PREFIX = "ladder:";
 
     private final TelegramCredentials credentials;
     private final TelegramCommandListener listener;
@@ -101,9 +106,39 @@ public class TelegramCommandHandler {
 
         for (TelegramUpdate update : parsed.result) {
             lastUpdateId = Math.max(lastUpdateId, update.update_id);
+
             if (update.message != null) {
                 dispatch(update.message.text, listener);
             }
+
+            if (update.callback_query != null) {
+                // Acknowledge first: until answerCallbackQuery is called the
+                // user's client keeps showing a spinner on the button, even
+                // though the action itself has already been handled.
+                acknowledgeCallback(update.callback_query.id);
+                dispatchCallback(update.callback_query.data, listener);
+            }
+        }
+    }
+
+    private void acknowledgeCallback(String callbackQueryId) {
+        if (callbackQueryId == null) {
+            return;
+        }
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(API_BASE + "/bot" + credentials.getBotToken()
+                            + "/answerCallbackQuery?callback_query_id="
+                            + URLEncoder.encode(callbackQueryId, StandardCharsets.UTF_8)))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+            httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            // Cosmetic only -- the command has still been dispatched.
+            log.warn("Telegram answerCallbackQuery failed: {}", e.getMessage());
         }
     }
 
@@ -124,6 +159,7 @@ public class TelegramCommandHandler {
             case "/exit" -> dispatchExit(parts, text, listener);
             case "/status" -> listener.onStatusRequested();
             case "/refresh" -> listener.onRefreshInstruments();
+            case "/ladder" -> dispatchLadder(parts, listener);
             default -> log.debug("Ignoring unrecognized command: {}", text);
         }
     }
@@ -141,6 +177,34 @@ public class TelegramCommandHandler {
             return;
         }
         listener.onBuy(List.of(Arrays.copyOfRange(parts, 1, parts.length)));
+    }
+
+    /**
+     * Bare "/ladder" asks for the choices to be pushed back as buttons;
+     * "/ladder OPTIONS" selects directly, for when you already know the
+     * name and don't want the round trip.
+     */
+    private static void dispatchLadder(String[] parts, TelegramCommandListener listener) {
+        if (parts.length == 1) {
+            listener.onLadderChoicesRequested();
+        } else {
+            listener.onLadderSelected(parts[1]);
+        }
+    }
+
+    /**
+     * A tapped inline-keyboard button arrives as a callback_query rather
+     * than a message, carrying the token that was attached to the button.
+     */
+    static void dispatchCallback(String data, TelegramCommandListener listener) {
+        if (data == null || data.isBlank()) {
+            return;
+        }
+        if (data.startsWith(LADDER_CALLBACK_PREFIX)) {
+            listener.onLadderSelected(data.substring(LADDER_CALLBACK_PREFIX.length()));
+        } else {
+            log.debug("Ignoring unrecognized callback data: {}", data);
+        }
     }
 
     private static void dispatchExit(String[] parts, String rawText, TelegramCommandListener listener) {
@@ -163,9 +227,15 @@ public class TelegramCommandHandler {
     private static final class TelegramUpdate {
         long update_id;
         TelegramMessage message;
+        TelegramCallbackQuery callback_query;
     }
 
     private static final class TelegramMessage {
         String text;
+    }
+
+    private static final class TelegramCallbackQuery {
+        String id;
+        String data;
     }
 }
