@@ -282,6 +282,7 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 3. Search for **`@userinfobot`**, tap **Start** — it replies with your numeric `Id:`. That's `TELEGRAM_CHAT_ID`.
 4. (Optional) Back in BotFather, send `/setcommands`, pick your bot, and paste:
    ```
+   help - Show every command
    track - Manage a position you hold: /track <symbol> [price] [qty]
    exit - Force-exit a trade: /exit <orderId> or /exit all
    status - List active trades
@@ -312,13 +313,14 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 | `/manage <orderId>` / `all` | Return a trade to full management |
 | `/ladder` | Show the milestone sets as buttons and pick one |
 | `/ladder <name>` | Select a set directly, skipping the buttons |
+| `/help` | List every command. `/start` shows the same |
 
-Anything else starting with `/` gets an "unknown command" reply listing what's available. That's deliberate: a mistyped command that silently did nothing would leave you believing a position was being watched when it wasn't. Ordinary chat is ignored, so the bot only answers command-shaped input.
+Anything else starting with `/` gets an "unknown command" reply pointing at `/help`. That's deliberate: a mistyped command that silently did nothing would leave you believing a position was being watched when it wasn't. Ordinary chat is ignored, so the bot only answers command-shaped input.
 
 ## Running tests
 
 ```bash
-mvn test              # full suite (245 tests)
+mvn test              # full suite (248 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 

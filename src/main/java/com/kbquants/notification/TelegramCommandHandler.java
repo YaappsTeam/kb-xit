@@ -35,6 +35,41 @@ public class TelegramCommandHandler {
     /** Prefix on inline-keyboard callback tokens for milestone-set choices. */
     public static final String LADDER_CALLBACK_PREFIX = "ladder:";
 
+    /**
+     * Lives next to the dispatch switch below so the two are updated
+     * together -- help that has drifted from what the bot actually accepts
+     * is worse than none, since it is trusted mid-trade.
+     */
+    // Laid out with separators rather than aligned columns: Telegram
+    // renders messages in a proportional font, so padded columns arrive
+    // ragged.
+    public static final String HELP_TEXT = String.join(System.lineSeparator(),
+            "xit-mc — exit management. It never buys; it manages the exit of positions you already hold.",
+            "",
+            "TRACK A POSITION",
+            "/track <symbol> — price = last traded, quantity sized from your capital and risk",
+            "/track <symbol> <qty> — explicit quantity",
+            "/track <symbol> <price> <qty> — fully explicit; the only form with simulated data",
+            "Symbols ignore case and spaces, e.g. nifty25000ce18aug26",
+            "",
+            "CLOSE A POSITION",
+            "/exit <orderId> — sell now",
+            "/exit all — sell everything open",
+            "",
+            "STEP BACK WITHOUT SELLING",
+            "/observe <orderId>|all — keep the alerts, no automatic exit",
+            "/release <orderId>|all — stop watching entirely; position stays open",
+            "/manage <orderId>|all — hand it back to the engine",
+            "/pause, /resume — stop or resume taking on new trades",
+            "",
+            "SETTINGS",
+            "/status — open trades: entry, breakeven, phase, stop, mode",
+            "/ladder — choose the milestone set (buttons)",
+            "/ladder <name> — choose it directly",
+            "/refresh — re-fetch the instrument master now",
+            "",
+            "Every percentage reported is net of brokerage and taxes.");
+
     private final TelegramCredentials credentials;
     private final TelegramCommandListener listener;
     private final HttpClient httpClient = HttpClient.newHttpClient();
@@ -156,6 +191,7 @@ public class TelegramCommandHandler {
         String[] parts = text.trim().split("\\s+");
 
         switch (parts[0]) {
+            case "/help", "/start" -> listener.onHelpRequested();
             case "/track" -> dispatchTrack(parts, text, listener);
             case "/exit" -> dispatchExit(parts, text, listener);
             case "/status" -> listener.onStatusRequested();

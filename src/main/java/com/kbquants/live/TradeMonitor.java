@@ -257,8 +257,12 @@ public class TradeMonitor implements TelegramCommandListener {
 
     @Override
     public void onUnknownCommand(String command) {
-        notifier.send(command + " is not a command. Available: "
-                + "/track /exit /status /ladder /refresh /pause /resume /release /observe /manage");
+        notifier.send(command + " is not a command — send /help");
+    }
+
+    @Override
+    public void onHelpRequested() {
+        notifier.send(TelegramCommandHandler.HELP_TEXT);
     }
 
     @Override

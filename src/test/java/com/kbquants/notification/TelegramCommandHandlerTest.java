@@ -67,6 +67,11 @@ class TelegramCommandHandlerTest {
         public void onUnknownCommand(String command) {
             events.add("unknown:" + command);
         }
+
+        @Override
+        public void onHelpRequested() {
+            events.add("help");
+        }
     }
 
     @Test
@@ -258,13 +263,48 @@ class TelegramCommandHandlerTest {
     }
 
     @Test
-    void shouldReportUnrecognizedCommand() {
+    void shouldDispatchHelp() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/help", listener);
 
-        assertEquals(List.of("unknown:/help"), listener.events);
+        assertEquals(List.of("help"), listener.events);
+    }
+
+    /** Telegram sends /start when a user first opens the bot. */
+    @Test
+    void startShouldAlsoShowHelp() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/start", listener);
+
+        assertEquals(List.of("help"), listener.events);
+    }
+
+    /**
+     * Help that has drifted from the dispatch switch is worse than none,
+     * since it is trusted mid-trade.
+     */
+    @Test
+    void helpTextShouldMentionEveryAcceptedCommand() {
+
+        for (String command : List.of("/track", "/exit", "/status", "/ladder", "/refresh",
+                "/pause", "/resume", "/release", "/observe", "/manage")) {
+            assertTrue(TelegramCommandHandler.HELP_TEXT.contains(command),
+                    () -> command + " missing from help text");
+        }
+    }
+
+    @Test
+    void shouldReportUnrecognizedCommand() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/nosuchcommand", listener);
+
+        assertEquals(List.of("unknown:/nosuchcommand"), listener.events);
     }
 
     /**

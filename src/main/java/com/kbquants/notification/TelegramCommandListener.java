@@ -51,4 +51,7 @@ public interface TelegramCommandListener {
      * watched when no command was dispatched.
      */
     void onUnknownCommand(String command);
+
+    /** List what the bot accepts. */
+    void onHelpRequested();
 }
