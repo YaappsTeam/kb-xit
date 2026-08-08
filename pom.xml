@@ -16,8 +16,9 @@
        Telegram, with the hard stop moved onto the ladder, 0.9.0
        cost-inclusive breakeven: all thresholds measured net of
        brokerage and taxes, 0.10.0 risk-based sizing, settled P&L at
-       exit, and expiry-day guards. -->
-  <version>0.10.0-SNAPSHOT</version>
+       exit, and expiry-day guards, 0.11.0 monitoring control (pause,
+       release, observe) so trades can be handed back without closing. -->
+  <version>0.11.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

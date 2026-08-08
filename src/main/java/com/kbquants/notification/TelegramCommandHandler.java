@@ -1,6 +1,7 @@
 package com.kbquants.notification;
 
 import com.google.gson.Gson;
+import com.kbquants.domain.MonitorMode;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -160,6 +161,11 @@ public class TelegramCommandHandler {
             case "/status" -> listener.onStatusRequested();
             case "/refresh" -> listener.onRefreshInstruments();
             case "/ladder" -> dispatchLadder(parts, listener);
+            case "/pause" -> listener.onAdoptionPaused(true);
+            case "/resume" -> listener.onAdoptionPaused(false);
+            case "/release" -> dispatchMode(parts, rawText(text), MonitorMode.RELEASED, listener);
+            case "/observe" -> dispatchMode(parts, rawText(text), MonitorMode.OBSERVED, listener);
+            case "/manage" -> dispatchMode(parts, rawText(text), MonitorMode.MANAGED, listener);
             default -> log.debug("Ignoring unrecognized command: {}", text);
         }
     }
@@ -190,6 +196,25 @@ public class TelegramCommandHandler {
         } else {
             listener.onLadderSelected(parts[1]);
         }
+    }
+
+    private static String rawText(String text) {
+        return text;
+    }
+
+    /**
+     * These never close a position -- they only change how far the engine
+     * may act on it. That is the whole point: /exit sells, these hand the
+     * trade back.
+     */
+    private static void dispatchMode(String[] parts, String rawText, MonitorMode mode,
+                                     TelegramCommandListener listener) {
+        if (parts.length != 2) {
+            log.warn("Malformed {} command (expected {} <orderId> or {} all): {}",
+                    parts[0], parts[0], parts[0], rawText);
+            return;
+        }
+        listener.onMonitorModeRequested(parts[1], mode);
     }
 
     /**

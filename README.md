@@ -2,7 +2,9 @@
 
 A trade exit management system: you tell it you're in a trade, it watches the live price and manages the exit — stop-loss, phase transitions, and profit-ownership locking — via a deterministic rules engine. It does not decide what to buy or when. See [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md) for the full scope.
 
-Right now the runnable mode is **paper trading**: you invoke a trade via a Telegram command, a simulated price feed drives the exit engine, and you get milestone notifications and can force-exit — all without a real broker or real money. Live-broker mode is on the roadmap; see [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+**It never places a buy order.** Every position it manages was bought elsewhere and handed to it — so it can also be handed back, without closing anything.
+
+Right now the runnable mode is **paper trading**, on either a simulated price feed or **real Upstox market data**. You declare a trade via Telegram, the engine watches the price and manages the exit, and every figure it reports is **net of brokerage and taxes**. Real sell-order placement is on the roadmap; see [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ## Prerequisites
 
@@ -254,6 +256,25 @@ Selection rules:
 - **You cannot switch while a trade is open.** Open trades keep the set they were opened with, so switching mid-flight would make "active" mean something other than what is managing your position. Exit first, then choose.
 - Numbers live in `MilestoneLadder` — changing them is a code change, deliberately, since they encode trading intent worth reviewing in a diff. Only the *choice* is a runtime decision.
 
+## Taking back control
+
+This app **never places a buy order**. It's purely an exit engine: every position it manages was bought elsewhere and handed to it by `/buy`. So it has to be possible to hand one back.
+
+`/exit` sells. These don't:
+
+| Mode | Notifications | Stop tracked | Auto exit |
+|---|---|---|---|
+| `MANAGED` (default) | Yes | Yes | Yes |
+| `OBSERVED` | Yes, including stop breaches | Yes | **No** |
+| `RELEASED` | No | No | No |
+
+- **`/release <orderId>`** — the position stays open, the engine stops acting on it. The reply quotes the stop it was holding, because that protection disappears with it.
+- **`/observe <orderId>`** — usually what you want when taking manual control: milestones and stop breaches are still reported, but nothing is ever sold. The information stays useful; the trigger is yours.
+- **`/manage <orderId>`** — hand it back to the engine.
+- **`/pause` / `/resume`** — control whether *new* trades are adopted. Open trades stay managed, and the reply says so; use `/release all` if you want the engine off everything.
+
+`/pause` matters most for Phase 3. Once the broker fill feed is wired in, it streams fills for the **whole account** — a trade punched into the Upstox app, a position from another strategy — and the engine would start managing positions it was never meant to touch. Until adoption is explicitly opt-in, `/pause` is what stands in the way.
+
 ## Setting up your Telegram bot
 
 1. In Telegram, search for **`@BotFather`**, tap **Start**, send `/newbot`, and follow the prompts (display name, then a unique username ending in `bot`). It replies with your **bot token** — this is `TELEGRAM_BOT_TOKEN`.
@@ -266,6 +287,11 @@ Selection rules:
    status - List active trades
    refresh - Re-fetch the instrument master now
    ladder - Choose the active milestone set
+   pause - Stop adopting new trades
+   resume - Resume adopting new trades
+   release - Hand a trade back (position stays open)
+   observe - Notify only, never auto-exit
+   manage - Return a trade to full management
    ```
    This makes the commands show up as autocomplete suggestions in the chat.
 
@@ -280,13 +306,17 @@ Selection rules:
 | `/exit all` | Force-exit every open trade |
 | `/status` | Report all open trades: instrument, entry, current price, phase, stop-loss |
 | `/refresh` | Re-fetch the instrument master now, instead of waiting for Wednesday |
+| `/pause` / `/resume` | Stop / resume adopting new trades. Open trades stay managed |
+| `/release <orderId>` / `all` | Hand a trade back: position stays open, engine stops acting |
+| `/observe <orderId>` / `all` | Keep the notifications, drop the automatic exit |
+| `/manage <orderId>` / `all` | Return a trade to full management |
 | `/ladder` | Show the milestone sets as buttons and pick one |
 | `/ladder <name>` | Select a set directly, skipping the buttons |
 
 ## Running tests
 
 ```bash
-mvn test              # full suite (229 tests)
+mvn test              # full suite (243 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 

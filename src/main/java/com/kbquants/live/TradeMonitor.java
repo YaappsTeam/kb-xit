@@ -4,6 +4,7 @@ import com.kbquants.domain.ActiveLadder;
 import com.kbquants.domain.ExitModel;
 import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.MilestoneSets;
+import com.kbquants.domain.MonitorMode;
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.TradeContext;
 import com.kbquants.engine.ExitEngine;
@@ -69,6 +70,16 @@ public class TradeMonitor implements TelegramCommandListener {
     /** Runs alongside the broker's quote so the model can be checked against it. */
     private final ChargesService referenceCharges = new EstimatedChargesService();
 
+    /**
+     * Whether newly arriving trades are taken on at all.
+     * <p>
+     * Matters most once a real OrderFillFeed is wired in: that streams
+     * fills for the whole account, including positions this system was
+     * never meant to touch. Until then only /buy invocations arrive, so
+     * this is a safety valve waiting for Phase 3.
+     */
+    private volatile boolean adoptingNewTrades = true;
+
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                         Notifier notifier, BuyRequestResolver buyRequestResolver) {
         this(orderFillFeed, feedFactory, notifier, buyRequestResolver, MilestoneLadder.defaultLadder(),
@@ -104,6 +115,17 @@ public class TradeMonitor implements TelegramCommandListener {
 
     void onFill(TradeFillEvent fill) {
 
+        // The paused check sits here rather than at the feed so that a
+        // broker fill and a Telegram invocation are treated identically --
+        // and so nothing is silently adopted while paused.
+        if (!adoptingNewTrades) {
+            log.info("Adoption paused, ignoring fill: orderId={} instrument={}",
+                    fill.getOrderId(), fill.getInstrumentKey());
+            notifier.send(String.format("%s: not tracked — adoption is paused (/resume to re-enable)",
+                    fill.getInstrumentKey()));
+            return;
+        }
+
         // Snapshotted so a set change mid-fill cannot leave the engine and
         // the tracker on different ladders.
         MilestoneLadder ladderForTrade = activeLadder.get();
@@ -138,7 +160,7 @@ public class TradeMonitor implements TelegramCommandListener {
 
     void onPrice(ActiveTrade trade, double currentPrice) {
 
-        if (trade.context.isClosed()) {
+        if (trade.context.isClosed() || trade.mode == MonitorMode.RELEASED) {
             return;
         }
 
@@ -147,7 +169,24 @@ public class TradeMonitor implements TelegramCommandListener {
 
         if (!trade.context.isClosed() && trade.context.getCurrentStopLoss() > 0
                 && currentPrice <= trade.context.getCurrentStopLoss()) {
+
             double stopLoss = trade.context.getCurrentStopLoss();
+
+            // In OBSERVED mode the engine reports the breach and stops
+            // there. Reported once, not on every subsequent tick below the
+            // stop, since the position stays open.
+            if (!trade.mode.isAutoExitAllowed()) {
+                if (!trade.stopBreachReported) {
+                    trade.stopBreachReported = true;
+                    log.info("Stop-loss breached but not acted on (observing): orderId={} price={} stopLoss={}",
+                            trade.fill.getOrderId(), currentPrice, stopLoss);
+                    notifier.send(String.format(
+                            "%s: stop-loss level %.2f breached at %.2f — observing only, no exit placed. Yours to act on.",
+                            trade.fill.getInstrumentKey(), stopLoss, currentPrice));
+                }
+                return;
+            }
+
             trade.engine.forceExit(trade.context, currentPrice);
             log.info("Stop-loss hit: orderId={} instrument={} price={} stopLoss={}",
                     trade.fill.getOrderId(), trade.fill.getInstrumentKey(), currentPrice, stopLoss);
@@ -217,6 +256,71 @@ public class TradeMonitor implements TelegramCommandListener {
     }
 
     @Override
+    public void onAdoptionPaused(boolean paused) {
+
+        adoptingNewTrades = !paused;
+        long open = openTrades().count();
+
+        if (paused) {
+            log.info("Adoption paused; {} open trade(s) remain managed", open);
+            notifier.send(open == 0
+                    ? "Paused — new trades will be ignored until /resume"
+                    : String.format("Paused — new trades will be ignored until /resume.%n"
+                            + "%d open trade(s) are still being managed; use /release all to hand those back too.", open));
+        } else {
+            notifier.send("Resumed — new trades will be tracked again");
+        }
+    }
+
+    @Override
+    public void onMonitorModeRequested(String target, MonitorMode mode) {
+
+        List<ActiveTrade> targets = "all".equalsIgnoreCase(target)
+                ? openTrades().toList()
+                : openTrades().filter(t -> t.fill.getOrderId().equals(target)).toList();
+
+        if (targets.isEmpty()) {
+            notifier.send("all".equalsIgnoreCase(target)
+                    ? "No open trades to change"
+                    : "No active trade found for orderId=" + target);
+            return;
+        }
+
+        for (ActiveTrade trade : targets) {
+            trade.mode = mode;
+            log.info("Monitor mode for orderId={} set to {}", trade.fill.getOrderId(), mode);
+            notifier.send(describeModeChange(trade, mode));
+        }
+    }
+
+    /**
+     * Spells out what protection is being given up. Releasing a trade
+     * removes the stop the engine was holding, and the user needs the
+     * number to take it over.
+     */
+    private static String describeModeChange(ActiveTrade trade, MonitorMode mode) {
+
+        String instrument = trade.fill.getInstrumentKey();
+        double stop = trade.context.getCurrentStopLoss();
+
+        return switch (mode) {
+            case RELEASED -> String.format(
+                    "%s: released — position still open, no longer monitored. The stop it was holding was %.2f; that protection is gone. (orderId=%s)",
+                    instrument, stop, trade.fill.getOrderId());
+            case OBSERVED -> String.format(
+                    "%s: observing — milestones still reported and the stop still tracked at %.2f, but no exit will be placed. (orderId=%s)",
+                    instrument, stop, trade.fill.getOrderId());
+            case MANAGED -> String.format(
+                    "%s: managed — exits will be placed automatically again, stop at %.2f. (orderId=%s)",
+                    instrument, stop, trade.fill.getOrderId());
+        };
+    }
+
+    private java.util.stream.Stream<ActiveTrade> openTrades() {
+        return activeTrades.values().stream().filter(t -> !t.context.isClosed());
+    }
+
+    @Override
     public void onRefreshInstruments() {
         notifier.send(buyRequestResolver.refreshInstruments());
     }
@@ -272,9 +376,14 @@ public class TradeMonitor implements TelegramCommandListener {
         StringBuilder sb = new StringBuilder();
         for (ActiveTrade trade : activeTrades.values()) {
             if (trade.context.isClosed()) continue;
-            sb.append(String.format("%s: entry=%.2f current=%.2f phase=%s sl=%.2f orderId=%s%n",
-                    trade.fill.getInstrumentKey(), trade.fill.getAveragePrice(), trade.lastPrice,
-                    trade.context.getCurrentPhase(), trade.context.getCurrentStopLoss(), trade.fill.getOrderId()));
+            sb.append(String.format("%s: entry=%.2f breakeven=%.2f current=%.2f phase=%s sl=%.2f [%s] orderId=%s%n",
+                    trade.fill.getInstrumentKey(), trade.fill.getAveragePrice(), trade.context.getBasePrice(),
+                    trade.lastPrice, trade.context.getCurrentPhase(), trade.context.getCurrentStopLoss(),
+                    trade.mode, trade.fill.getOrderId()));
+        }
+
+        if (!adoptingNewTrades) {
+            sb.append("(adoption paused — new trades ignored)").append(System.lineSeparator());
         }
 
         notifier.send(sb.length() == 0 ? "No active trades" : sb.toString());
@@ -404,6 +513,8 @@ public class TradeMonitor implements TelegramCommandListener {
         final TradeCost cost;
         volatile double lastPrice;
         volatile boolean breakevenReported;
+        volatile boolean stopBreachReported;
+        volatile MonitorMode mode = MonitorMode.MANAGED;
 
         ActiveTrade(TradeFillEvent fill, TradeContext context, ExitEngine engine,
                     ProfitMilestoneTracker tracker, TradeCost cost) {

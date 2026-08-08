@@ -52,6 +52,16 @@ class TelegramCommandHandlerTest {
         public void onLadderSelected(String setName) {
             events.add("ladderSelected:" + setName);
         }
+
+        @Override
+        public void onAdoptionPaused(boolean paused) {
+            events.add(paused ? "paused" : "resumed");
+        }
+
+        @Override
+        public void onMonitorModeRequested(String target, com.kbquants.domain.MonitorMode mode) {
+            events.add("mode:" + mode + ":" + target);
+        }
     }
 
     @Test
@@ -189,6 +199,40 @@ class TelegramCommandHandlerTest {
         TelegramCommandHandler.dispatchCallback("something:else", listener);
         TelegramCommandHandler.dispatchCallback(null, listener);
         TelegramCommandHandler.dispatchCallback("", listener);
+
+        assertTrue(listener.events.isEmpty());
+    }
+
+    @Test
+    void shouldDispatchPauseAndResume() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/pause", listener);
+        TelegramCommandHandler.dispatch("/resume", listener);
+
+        assertEquals(List.of("paused", "resumed"), listener.events);
+    }
+
+    @Test
+    void shouldDispatchMonitorModeCommands() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/release order-1", listener);
+        TelegramCommandHandler.dispatch("/observe order-1", listener);
+        TelegramCommandHandler.dispatch("/manage all", listener);
+
+        assertEquals(List.of("mode:RELEASED:order-1", "mode:OBSERVED:order-1", "mode:MANAGED:all"),
+                listener.events);
+    }
+
+    @Test
+    void shouldIgnoreMonitorModeCommandWithoutATarget() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/release", listener);
 
         assertTrue(listener.events.isEmpty());
     }

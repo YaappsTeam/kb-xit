@@ -30,4 +30,18 @@ public interface TelegramCommandListener {
 
     /** Make the named milestone set the active one for subsequent trades. */
     void onLadderSelected(String setName);
+
+    /**
+     * Stop or resume taking on new trades. Affects future invocations only
+     * -- trades already open keep being managed, which is why this is
+     * separate from releasing them.
+     */
+    void onAdoptionPaused(boolean paused);
+
+    /**
+     * Change how far the engine may act on a trade, without closing it.
+     *
+     * @param target  an orderId, or "all"
+     */
+    void onMonitorModeRequested(String target, com.kbquants.domain.MonitorMode mode);
 }
