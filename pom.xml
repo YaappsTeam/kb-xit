@@ -12,8 +12,9 @@
        Analytics Token (paper trades on real prices), 0.6.0 symbol
        resolution via the instrument master plus LTP-defaulted price and
        lot-aware position sizing, 0.7.0 weekly instrument-master refresh
-       plus on-demand /refresh. -->
-  <version>0.7.0-SNAPSHOT</version>
+       plus on-demand /refresh, 0.8.0 named milestone sets selectable from
+       Telegram, with the hard stop moved onto the ladder. -->
+  <version>0.8.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

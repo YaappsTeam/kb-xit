@@ -2,11 +2,13 @@ package com.kbquants.live;
 
 import com.kbquants.domain.ExitModel;
 import com.kbquants.domain.MilestoneLadder;
+import com.kbquants.domain.MilestoneSets;
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.TradeContext;
 import com.kbquants.engine.ExitEngine;
 import com.kbquants.notification.Notifier;
 import com.kbquants.notification.ProfitMilestoneTracker;
+import com.kbquants.notification.TelegramCommandHandler;
 import com.kbquants.notification.TelegramCommandListener;
 import com.kbquants.session.BuyRequest;
 import com.kbquants.session.BuyRequestResolver;
@@ -15,9 +17,11 @@ import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.TradeFillEvent;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -49,6 +53,14 @@ public class TradeMonitor implements TelegramCommandListener {
     private final BuyRequestResolver buyRequestResolver;
     private final Map<String, ActiveTrade> activeTrades = new ConcurrentHashMap<>();
 
+    /**
+     * The set new trades will use. Volatile because it is changed from the
+     * Telegram poller thread and read wherever a fill arrives. Open trades
+     * keep the ladder they were opened with -- their ExitEngine and
+     * milestone tracker are built from it at fill time.
+     */
+    private volatile MilestoneLadder activeLadder;
+
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                         Notifier notifier, BuyRequestResolver buyRequestResolver) {
         this(orderFillFeed, feedFactory, notifier, buyRequestResolver, MilestoneLadder.defaultLadder());
@@ -60,17 +72,22 @@ public class TradeMonitor implements TelegramCommandListener {
         this.notifier = Objects.requireNonNull(notifier, "notifier must not be null");
         this.buyRequestResolver = Objects.requireNonNull(buyRequestResolver, "buyRequestResolver must not be null");
         this.ladder = Objects.requireNonNull(ladder, "ladder must not be null");
+        this.activeLadder = ladder;
         Objects.requireNonNull(orderFillFeed, "orderFillFeed must not be null").start(this::onFill);
     }
 
     void onFill(TradeFillEvent fill) {
 
+        // Snapshotted so a set change mid-fill cannot leave the engine and
+        // the tracker on different ladders.
+        MilestoneLadder ladderForTrade = activeLadder;
+
         TradeContext context = new TradeContext(
                 fill.getOrderId(), fill.getAveragePrice(), fill.getAveragePrice(),
                 fill.getFilledQuantity(), ExitModel.MODERATE, OwnershipMode.MILESTONE);
 
-        ActiveTrade trade = new ActiveTrade(
-                fill, context, new ExitEngine(context, ladder), new ProfitMilestoneTracker(fill.getAveragePrice(), ladder));
+        ActiveTrade trade = new ActiveTrade(fill, context, new ExitEngine(context, ladderForTrade),
+                new ProfitMilestoneTracker(fill.getAveragePrice(), ladderForTrade));
 
         if (activeTrades.putIfAbsent(fill.getOrderId(), trade) != null) {
             log.debug("Ignoring duplicate fill event for orderId={}", fill.getOrderId());
@@ -158,6 +175,51 @@ public class TradeMonitor implements TelegramCommandListener {
     @Override
     public void onRefreshInstruments() {
         notifier.send(buyRequestResolver.refreshInstruments());
+    }
+
+    @Override
+    public void onLadderChoicesRequested() {
+
+        LinkedHashMap<String, String> choices = new LinkedHashMap<>();
+        for (MilestoneLadder candidate : MilestoneSets.available()) {
+            String label = MilestoneSets.describe(candidate)
+                    + (candidate.getName().equals(activeLadder.getName()) ? "  ✓ active" : "");
+            choices.put(label, TelegramCommandHandler.LADDER_CALLBACK_PREFIX + candidate.getName());
+        }
+
+        notifier.sendChoices("Milestone set for the next trade (active: " + activeLadder.getName() + ")", choices);
+    }
+
+    @Override
+    public void onLadderSelected(String setName) {
+
+        Optional<MilestoneLadder> selected = MilestoneSets.byName(setName);
+        if (selected.isEmpty()) {
+            notifier.send("Unknown milestone set: " + setName + " (available: " + String.join(", ", MilestoneSets.names()) + ")");
+            return;
+        }
+
+        // Switching is a pre-trade decision: an open trade keeps the ladder
+        // it was opened with, so allowing a change mid-flight would leave
+        // "active" meaning something different from what is actually
+        // managing your money.
+        long openTrades = activeTrades.values().stream().filter(t -> !t.context.isClosed()).count();
+        if (openTrades > 0) {
+            notifier.send(String.format(
+                    "Cannot change milestone set with %d trade(s) open — they keep the set they were opened with. Exit first, then choose.",
+                    openTrades));
+            return;
+        }
+
+        MilestoneLadder ladder = selected.get();
+        if (ladder.getName().equals(activeLadder.getName())) {
+            notifier.send(MilestoneSets.describe(ladder) + " — already active");
+            return;
+        }
+
+        activeLadder = ladder;
+        log.info("Active milestone set changed to {}", ladder.getName());
+        notifier.send("Milestone set is now " + MilestoneSets.describe(ladder));
     }
 
     @Override

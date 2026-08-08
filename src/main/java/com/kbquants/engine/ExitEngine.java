@@ -15,7 +15,7 @@ public class ExitEngine {
 
     public ExitEngine(TradeContext context, MilestoneLadder ladder) {
         this.phaseManager = new PhaseManager(ladder);
-        this.stopLossEngine = new StopLossEngine();
+        this.stopLossEngine = new StopLossEngine(ladder.getHardStopPercent());
         this.ownershipStrategy = OwnershipStrategyFactory.create(context.getOwnershipMode(), stopLossEngine, ladder);
     }
 
