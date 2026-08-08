@@ -280,21 +280,21 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 1. In Telegram, search for **`@BotFather`**, tap **Start**, send `/newbot`, and follow the prompts (display name, then a unique username ending in `bot`). It replies with your **bot token** — this is `TELEGRAM_BOT_TOKEN`.
 2. Message your new bot at least once (e.g. `hi`) — Telegram won't let a bot message you until you've messaged it first.
 3. Search for **`@userinfobot`**, tap **Start** — it replies with your numeric `Id:`. That's `TELEGRAM_CHAT_ID`.
-4. (Optional) Back in BotFather, send `/setcommands`, pick your bot, and paste:
+4. (Optional) Register the command list so it autocompletes in the chat. Either send `/setcommands` to BotFather, pick your bot, and paste:
    ```
-   help - Show every command
-   track - Manage a position you hold: /track <symbol> [price] [qty]
-   exit - Force-exit a trade: /exit <orderId> or /exit all
-   status - List active trades
-   refresh - Re-fetch the instrument master now
+   track - Manage the exit of a position you hold: /track <symbol> [price] [qty]
+   status - Open trades: entry, breakeven, current, phase, stop, mode
+   exit - Sell now: /exit <orderId> or /exit all
+   observe - Keep the alerts, stop automatic exits (position stays open)
+   release - Stop watching entirely; position stays open
+   manage - Hand a trade back to the engine
+   pause - Stop taking on new trades
+   resume - Resume taking on new trades
    ladder - Choose the active milestone set
-   pause - Stop adopting new trades
-   resume - Resume adopting new trades
-   release - Hand a trade back (position stays open)
-   observe - Notify only, never auto-exit
-   manage - Return a trade to full management
+   refresh - Re-fetch the instrument master now
+   help - Show every command
    ```
-   This makes the commands show up as autocomplete suggestions in the chat.
+   …or skip BotFather entirely and POST the same list to Telegram's [`setMyCommands`](https://core.telegram.org/bots/api#setmycommands) API with your bot token. Ordered by how often each is reached for, not alphabetically. `/start` isn't listed — Telegram sends it automatically when a user first opens the bot, and it shows the same output as `/help`.
 
 ## Bot commands
 
