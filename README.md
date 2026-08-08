@@ -108,11 +108,7 @@ export MARKET_DATA="live"
 export UPSTOX_ANALYTICS_TOKEN="your-upstox-analytics-token-here"
 ```
 
-You should see `... started in PAPER trading mode with LIVE Upstox market data`. Then `/buy` with a real instrument key — the entry price you pass is your declared entry, and live ticks are compared against it:
-
-```
-/buy NSE_INDEX|Nifty 50 25000 50
-```
+You should see `... started in PAPER trading mode with LIVE Upstox market data`. Live mode also needs `CAPITAL_PER_TRADE` — see the next section, which covers how `/buy` is used from here on.
 
 Ticks only arrive while the market is open, so outside market hours the engine sits idle rather than reporting an error.
 
@@ -127,7 +123,7 @@ Typing `NSE_FO|45148` while scalping is not realistic, so in live mode `/buy` ta
 /buy NSE_EQ|INE012A01025 …      raw instrument key still works
 ```
 
-Matching ignores case and spaces, so `NIFTY 25000 CE 18 AUG 26` and `nifty25000ce18aug26` are the same instrument, and `NIFTY50` finds the index. Symbols are looked up in a local copy of Upstox's instrument master (~2 MB, downloaded once a day into `~/.xit-mc/instruments`, ~40k instruments) — a map lookup, not an API call, so it costs nothing in the hot path. With exactly one trailing number it is read as a **quantity**, never a price.
+Matching ignores case and spaces, so `NIFTY 25000 CE 18 AUG 26` and `nifty25000ce18aug26` are the same instrument, and `NIFTY50` finds the index. Symbols are looked up in a local copy of Upstox's instrument master (~2 MB, ~43k instruments, cached in `~/.xit-mc/instruments`) — a map lookup, not an API call, so it costs nothing in the hot path. With exactly one trailing number it is read as a **quantity**, never a price.
 
 **Quantity is sized in whole lots**, which matters for F&O where quantity must be a multiple of the contract lot:
 
@@ -154,6 +150,18 @@ A handful of trading symbols are ambiguous (`CHOLAFIN`, `MOTHERSON`, `ELECTCAST`
 
 In simulated mode there is no instrument master and no price source, so `/buy` still requires `<instrumentKey> <price> <qty>` in full.
 
+### Instrument master refresh
+
+The master refreshes **weekly, on Wednesdays** — the cache is stamped with the most recent Wednesday, so the first run on or after one downloads and every run until the next reads from disk. That keeps the ~2 MB download and 37 MB parse off the VM on the other six days.
+
+The trade-off: between refreshes, contracts listed since Wednesday won't resolve, and expired ones linger. When you need one immediately:
+
+```
+/refresh
+```
+
+That forces a download regardless of schedule and takes effect on the next command. If it fails, the previous master stays loaded — stale beats none mid-session.
+
 ## Setting up your Telegram bot
 
 1. In Telegram, search for **`@BotFather`**, tap **Start**, send `/newbot`, and follow the prompts (display name, then a unique username ending in `bot`). It replies with your **bot token** — this is `TELEGRAM_BOT_TOKEN`.
@@ -164,6 +172,7 @@ In simulated mode there is no instrument master and no price source, so `/buy` s
    buy - Invoke a trade: /buy <instrument> <price> <qty>
    exit - Force-exit a trade: /exit <orderId> or /exit all
    status - List active trades
+   refresh - Re-fetch the instrument master now
    ```
    This makes the commands show up as autocomplete suggestions in the chat.
 
@@ -177,11 +186,12 @@ In simulated mode there is no instrument master and no price source, so `/buy` s
 | `/exit <orderId>` | Force-exit that trade |
 | `/exit all` | Force-exit every open trade |
 | `/status` | Report all open trades: instrument, entry, current price, phase, stop-loss |
+| `/refresh` | Re-fetch the instrument master now, instead of waiting for Wednesday |
 
 ## Running tests
 
 ```bash
-mvn test              # full suite (161 tests)
+mvn test              # full suite (172 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 

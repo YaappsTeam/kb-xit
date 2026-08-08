@@ -18,4 +18,10 @@ public interface TelegramCommandListener {
     void onExit(String orderId);
     void onExitAll();
     void onStatusRequested();
+
+    /**
+     * Re-fetch the instrument master now, rather than waiting for its
+     * weekly refresh -- for picking up a contract listed since the last one.
+     */
+    void onRefreshInstruments();
 }

@@ -123,6 +123,7 @@ public class TelegramCommandHandler {
             case "/buy" -> dispatchBuy(parts, text, listener);
             case "/exit" -> dispatchExit(parts, text, listener);
             case "/status" -> listener.onStatusRequested();
+            case "/refresh" -> listener.onRefreshInstruments();
             default -> log.debug("Ignoring unrecognized command: {}", text);
         }
     }

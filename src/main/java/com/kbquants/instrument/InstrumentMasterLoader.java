@@ -12,6 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,16 +24,26 @@ import java.util.zip.GZIPInputStream;
  * Downloads and parses Upstox's NSE instrument master.
  * <p>
  * The file is public (no token needed), ~1.9 MB gzipped and ~37 MB of JSON
- * covering 80k+ instruments. It is cached on disk under a date-stamped
- * name, so it is fetched once per day and read locally thereafter --
- * instrument masters change daily as contracts are added and expire.
+ * covering 80k+ instruments.
+ * <p>
+ * Refreshed <b>weekly rather than daily</b>, to keep recurring download and
+ * parse cost off the VM: the cache is stamped with the most recent
+ * Wednesday, so the first run on or after a Wednesday downloads and every
+ * run until the next one reads from disk. {@link #load(boolean)} with
+ * {@code forceRefresh} bypasses that whenever a mid-week contract needs
+ * picking up.
+ * <p>
+ * The trade-off is deliberate and worth knowing: between refreshes, newly
+ * listed contracts are missing and expired ones linger. For weekly-expiry
+ * options a Wednesday anchor keeps the cache aligned with the expiry cycle,
+ * but a contract listed on Thursday will not resolve until forced.
  * <p>
  * Parsing streams rather than materialising the whole document, and keeps
  * only the segments worth trading, which discards roughly half the records
  * (NSE_COM and NCD_FO) before they ever reach the heap.
  */
 @Slf4j
-public final class InstrumentMasterLoader {
+public class InstrumentMasterLoader {
 
     private static final String NSE_MASTER_URL =
             "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz";
@@ -60,22 +72,37 @@ public final class InstrumentMasterLoader {
     }
 
     public InstrumentRegistry load() throws IOException {
-        return new InstrumentRegistry(loadInstruments());
+        return load(false);
     }
 
-    List<Instrument> loadInstruments() throws IOException {
+    public InstrumentRegistry load(boolean forceRefresh) throws IOException {
+        return new InstrumentRegistry(loadInstruments(forceRefresh));
+    }
 
-        Path cached = cacheDir.resolve("NSE-" + LocalDate.now() + ".json.gz");
+    /**
+     * Most recent Wednesday on or before the given date -- the stamp that
+     * makes the cache weekly. Wednesday itself maps to itself, so a refresh
+     * happens on the first run of each Wednesday and not again until the
+     * next one.
+     */
+    static LocalDate refreshAnchor(LocalDate today) {
+        int daysSinceWednesday = (today.getDayOfWeek().getValue() - DayOfWeek.WEDNESDAY.getValue() + 7) % 7;
+        return today.minusDays(daysSinceWednesday);
+    }
 
-        if (!Files.exists(cached)) {
+    List<Instrument> loadInstruments(boolean forceRefresh) throws IOException {
+
+        Path cached = cacheDir.resolve("NSE-" + refreshAnchor(LocalDate.now()) + ".json.gz");
+
+        if (forceRefresh || !Files.exists(cached)) {
             Files.createDirectories(cacheDir);
-            log.info("Downloading Upstox instrument master to {}", cached);
+            log.info("Downloading Upstox instrument master to {}{}", cached, forceRefresh ? " (forced)" : "");
             try (InputStream in = openMaster()) {
-                Files.copy(in, cached);
+                Files.copy(in, cached, StandardCopyOption.REPLACE_EXISTING);
             }
             deleteStaleCaches(cached);
         } else {
-            log.info("Using cached instrument master {}", cached);
+            log.info("Using cached instrument master {} (refreshes weekly, on Wednesdays)", cached);
         }
 
         try (JsonReader reader = new JsonReader(
@@ -90,8 +117,8 @@ public final class InstrumentMasterLoader {
     }
 
     /**
-     * Yesterday's master is dead weight once today's exists; expired
-     * contracts in it are actively misleading.
+     * Last week's master is dead weight once the current one exists;
+     * expired contracts in it are actively misleading.
      */
     private void deleteStaleCaches(Path keep) {
         try (var entries = Files.list(cacheDir)) {

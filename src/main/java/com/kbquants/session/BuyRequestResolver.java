@@ -12,4 +12,16 @@ import java.util.List;
 public interface BuyRequestResolver {
 
     BuyRequest resolve(List<String> args);
+
+    /**
+     * Forces the instrument master to be re-fetched, bypassing its weekly
+     * schedule, and returns a message describing the outcome.
+     * <p>
+     * Lives here rather than on TradeMonitor because the resolver is the
+     * only component that knows whether an instrument master is in use at
+     * all -- resolvers without one simply say so.
+     */
+    default String refreshInstruments() {
+        return "no instrument master in use (symbol lookup needs MARKET_DATA=live)";
+    }
 }

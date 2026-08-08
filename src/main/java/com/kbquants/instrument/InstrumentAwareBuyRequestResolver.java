@@ -20,22 +20,39 @@ import java.util.OptionalDouble;
  *   /buy NSE_EQ|INE012A01025 ... -- raw instrument key, still accepted
  * </pre>
  * <p>
- * Symbols are matched longest-first, which is what disambiguates
- * {@code /buy NIFTY 50}: the two-token symbol "NIFTY 50" is tried as an
- * instrument before "NIFTY" with a quantity of 50. Since matching also
- * ignores spaces, {@code /buy NIFTY50} reaches the same instrument in one
- * token and sidesteps the ambiguity entirely.
+ * Symbols are matched longest-first, which is what stops a multi-token
+ * symbol being misread: {@code /buy NIFTY 25000 CE 18 AUG 26} resolves the
+ * whole option rather than treating the trailing "26" as a quantity.
+ * Matching also ignores case and spaces, so the same contract can be typed
+ * as {@code nifty25000ce18aug26}.
  */
 public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolver {
 
-    private final InstrumentRegistry registry;
+    private final InstrumentCatalog catalog;
     private final QuoteService quoteService;
     private final PositionSizer sizer;
 
     public InstrumentAwareBuyRequestResolver(InstrumentRegistry registry, QuoteService quoteService, PositionSizer sizer) {
-        this.registry = Objects.requireNonNull(registry, "registry must not be null");
+        this(new InstrumentCatalog(registry), quoteService, sizer);
+    }
+
+    public InstrumentAwareBuyRequestResolver(InstrumentCatalog catalog, QuoteService quoteService, PositionSizer sizer) {
+        this.catalog = Objects.requireNonNull(catalog, "catalog must not be null");
         this.quoteService = Objects.requireNonNull(quoteService, "quoteService must not be null");
         this.sizer = Objects.requireNonNull(sizer, "sizer must not be null");
+    }
+
+    /**
+     * Read per call rather than cached in a field, so an on-demand refresh
+     * takes effect on the very next command.
+     */
+    private InstrumentRegistry registry() {
+        return catalog.registry();
+    }
+
+    @Override
+    public String refreshInstruments() {
+        return catalog.refresh();
     }
 
     @Override
@@ -54,12 +71,12 @@ public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolv
                 continue;
             }
 
-            Optional<Instrument> found = registry.resolve(candidate);
+            Optional<Instrument> found = registry().resolve(candidate);
             if (found.isEmpty()) {
                 // An ambiguous symbol is a different failure from an unknown
                 // one, and only worth reporting for the full-length candidate;
                 // shorter prefixes are just wrong guesses.
-                if (symbolTokens == args.size() && registry.candidatesFor(candidate).size() > 1) {
+                if (symbolTokens == args.size() && registry().candidatesFor(candidate).size() > 1) {
                     return BuyRequest.rejected(ambiguityMessage(candidate));
                 }
                 continue;
@@ -139,7 +156,7 @@ public final class InstrumentAwareBuyRequestResolver implements BuyRequestResolv
 
     private String ambiguityMessage(String candidate) {
         StringBuilder sb = new StringBuilder("'" + candidate + "' is ambiguous — pass the full instrument key:");
-        for (Instrument instrument : registry.candidatesFor(candidate)) {
+        for (Instrument instrument : registry().candidatesFor(candidate)) {
             sb.append("\n  ").append(instrument.getInstrumentKey())
               .append("  ").append(instrument.getName() == null ? "" : instrument.getName());
         }

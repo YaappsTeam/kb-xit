@@ -1,8 +1,8 @@
 package com.kbquants;
 
 import com.kbquants.instrument.InstrumentAwareBuyRequestResolver;
+import com.kbquants.instrument.InstrumentCatalog;
 import com.kbquants.instrument.InstrumentMasterLoader;
-import com.kbquants.instrument.InstrumentRegistry;
 import com.kbquants.instrument.PositionSizer;
 import com.kbquants.live.TradeMonitor;
 import com.kbquants.live.UpstoxDataCredentials;
@@ -108,8 +108,9 @@ public class Main {
 
     /**
      * Symbol lookup plus price/quantity defaulting. Requires the instrument
-     * master (a ~2 MB download, cached daily) and CAPITAL_PER_TRADE, which
-     * is what a bare {@code /buy NIFTY50} sizes against.
+     * master (a ~2 MB download, refreshed weekly on Wednesdays or on demand
+     * via /refresh) and CAPITAL_PER_TRADE, which is what a bare
+     * {@code /buy <symbol>} sizes against.
      */
     private static BuyRequestResolver instrumentAwareResolver(UpstoxDataCredentials dataCredentials) throws IOException {
 
@@ -119,9 +120,8 @@ public class Main {
                     "Missing required environment variable: CAPITAL_PER_TRADE (used to size a bare /buy <symbol>)");
         }
 
-        InstrumentRegistry registry = new InstrumentMasterLoader().load();
         return new InstrumentAwareBuyRequestResolver(
-                registry,
+                InstrumentCatalog.loadFrom(new InstrumentMasterLoader()),
                 new UpstoxQuoteService(dataCredentials),
                 new PositionSizer(Double.parseDouble(capital)));
     }

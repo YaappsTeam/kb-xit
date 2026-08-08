@@ -156,6 +156,11 @@ public class TradeMonitor implements TelegramCommandListener {
     }
 
     @Override
+    public void onRefreshInstruments() {
+        notifier.send(buyRequestResolver.refreshInstruments());
+    }
+
+    @Override
     public void onStatusRequested() {
 
         StringBuilder sb = new StringBuilder();

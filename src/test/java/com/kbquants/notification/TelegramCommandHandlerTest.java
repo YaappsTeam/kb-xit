@@ -37,6 +37,11 @@ class TelegramCommandHandlerTest {
         public void onStatusRequested() {
             events.add("status");
         }
+
+        @Override
+        public void onRefreshInstruments() {
+            events.add("refresh");
+        }
     }
 
     @Test
@@ -123,6 +128,16 @@ class TelegramCommandHandlerTest {
         TelegramCommandHandler.dispatch("/status", listener);
 
         assertEquals(List.of("status"), listener.events);
+    }
+
+    @Test
+    void shouldDispatchRefreshCommand() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/refresh", listener);
+
+        assertEquals(List.of("refresh"), listener.events);
     }
 
     @Test
