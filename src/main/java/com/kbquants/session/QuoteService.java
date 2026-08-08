@@ -4,7 +4,7 @@ import java.util.OptionalDouble;
 
 /**
  * A one-shot price lookup, as opposed to {@link MarketDataFeed}'s
- * continuous stream. Used to default a trade's entry price at /buy time,
+ * continuous stream. Used to default a trade's entry price at /track time,
  * including outside market hours where the stream has nothing to deliver
  * but the last traded price is still known.
  */

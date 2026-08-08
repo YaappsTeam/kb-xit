@@ -34,7 +34,7 @@ import java.util.function.Function;
 
 /**
  * Central live-trading orchestrator. Accepts trade invocations from any
- * OrderFillFeed (a real broker, or Telegram's /buy command in paper mode --
+ * OrderFillFeed (a real broker, or Telegram's /track command in paper mode --
  * see TelegramCommandListener), watches each trade's live price via a
  * broker-agnostic MarketDataFeed, and on every tick runs both the full
  * ExitEngine (hard safety, phase transitions, ownership locks) and the
@@ -75,7 +75,7 @@ public class TradeMonitor implements TelegramCommandListener {
      * <p>
      * Matters most once a real OrderFillFeed is wired in: that streams
      * fills for the whole account, including positions this system was
-     * never meant to touch. Until then only /buy invocations arrive, so
+     * never meant to touch. Until then only /track invocations arrive, so
      * this is a safety valve waiting for Phase 3.
      */
     private volatile boolean adoptingNewTrades = true;
@@ -217,8 +217,8 @@ public class TradeMonitor implements TelegramCommandListener {
         TrackRequest request = trackRequestResolver.resolve(args);
 
         if (!request.isAccepted()) {
-            log.info("Rejected /buy {}: {}", args, request.getRejectionReason());
-            notifier.send("Cannot buy: " + request.getRejectionReason());
+            log.info("Rejected /track {}: {}", args, request.getRejectionReason());
+            notifier.send("Cannot track: " + request.getRejectionReason());
             return;
         }
 

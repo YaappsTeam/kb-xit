@@ -10,18 +10,18 @@ import java.util.Optional;
 import java.util.OptionalDouble;
 
 /**
- * Resolves /buy arguments against the instrument master, defaulting the
+ * Resolves /track arguments against the instrument master, defaulting the
  * entry price from the last traded price and the quantity from capital per
  * trade. Supports:
  * <pre>
- *   /buy NIFTY50                 -- price and quantity both defaulted
- *   /buy ACC 25                  -- explicit quantity, price defaulted
- *   /buy ACC 1850.5 25           -- both explicit
- *   /buy NSE_EQ|INE012A01025 ... -- raw instrument key, still accepted
+ *   /track NIFTY50                 -- price and quantity both defaulted
+ *   /track ACC 25                  -- explicit quantity, price defaulted
+ *   /track ACC 1850.5 25           -- both explicit
+ *   /track NSE_EQ|INE012A01025 ... -- raw instrument key, still accepted
  * </pre>
  * <p>
  * Symbols are matched longest-first, which is what stops a multi-token
- * symbol being misread: {@code /buy NIFTY 25000 CE 18 AUG 26} resolves the
+ * symbol being misread: {@code /track NIFTY 25000 CE 18 AUG 26} resolves the
  * whole option rather than treating the trailing "26" as a quantity.
  * Matching also ignores case and spaces, so the same contract can be typed
  * as {@code nifty25000ce18aug26}.
@@ -91,7 +91,7 @@ public final class InstrumentAwareTrackRequestResolver implements TrackRequestRe
     private TrackRequest build(Instrument instrument, List<String> trailing) {
 
         // An index has no tradable position behind it -- you trade its
-        // options or futures. Accepting the buy would open a paper trade
+        // options or futures. Accepting it would open a paper trade
         // that could never correspond to a real one.
         if ("NSE_INDEX".equals(instrument.getSegment())) {
             return TrackRequest.rejected(instrument.getTradingSymbol()

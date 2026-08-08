@@ -30,7 +30,7 @@ import java.util.function.Function;
 
 /**
  * Entry point for paper trading mode: a trade is invoked via Telegram's
- * /buy command, watched via a price feed, and managed by the full
+ * /track command, watched via a price feed, and managed by the full
  * ExitEngine + unified milestone ladder via TradeMonitor. No real broker
  * order is ever placed -- see PRODUCT_REQUIREMENTS.md F7.
  * <p>
@@ -76,7 +76,7 @@ public class Main {
 
         // Everything below is resolved eagerly so a missing Analytics Token,
         // an unreachable instrument master or a bad CAPITAL_PER_TRADE fails
-        // at startup rather than on the first /buy, mid-trading-session.
+        // at startup rather than on the first /track, mid-trading-session.
         Function<TradeFillEvent, MarketDataFeed> feedFactory;
         TrackRequestResolver trackRequestResolver;
         ChargesService chargesService;

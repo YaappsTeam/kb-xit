@@ -28,7 +28,7 @@ import java.util.OptionalDouble;
  * matters: the funds and margin APIs really are restricted, so this was not
  * a given.
  * <p>
- * Two calls per trade, one per side, adding roughly 100 ms to /buy. Sell
+ * Two calls per trade, one per side, adding roughly 100 ms to /track. Sell
  * charges are quoted at the entry price rather than the eventual exit
  * price, which is unknown at entry; the resulting understatement is about
  * Rs 0.24 on a Rs 46.7k position, so no refinement pass is worth a third

@@ -14,7 +14,7 @@ import java.util.Optional;
  * In-memory symbol lookup over the Upstox instrument master.
  * <p>
  * Deliberately a local map rather than an API call: resolution sits in the
- * hot path of a scalping command, where a network round trip per /buy is
+ * hot path of a scalping command, where a network round trip per /track is
  * exactly what we are trying to avoid.
  * <p>
  * Lookup is case- and whitespace-insensitive, so all of "NIFTY 50",

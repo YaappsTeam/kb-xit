@@ -12,7 +12,7 @@ import java.util.Objects;
  * switches sets mid-session.
  * <p>
  * The reference is volatile because it is written from the Telegram poller
- * thread and read from wherever a fill or a /buy arrives.
+ * thread and read from wherever a fill or a /track arrives.
  */
 public final class ActiveLadder {
 
