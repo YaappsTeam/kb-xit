@@ -1,6 +1,6 @@
 package com.kbquants;
 
-import com.kbquants.instrument.InstrumentAwareBuyRequestResolver;
+import com.kbquants.instrument.InstrumentAwareTrackRequestResolver;
 import com.kbquants.instrument.InstrumentCatalog;
 import com.kbquants.instrument.InstrumentMasterLoader;
 import com.kbquants.instrument.PositionSizer;
@@ -16,8 +16,8 @@ import com.kbquants.session.EstimatedChargesService;
 import com.kbquants.notification.TelegramCommandHandler;
 import com.kbquants.notification.TelegramCredentials;
 import com.kbquants.notification.TelegramNotifier;
-import com.kbquants.session.BuyRequestResolver;
-import com.kbquants.session.LiteralBuyRequestResolver;
+import com.kbquants.session.TrackRequestResolver;
+import com.kbquants.session.LiteralTrackRequestResolver;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.NoOpOrderFillFeed;
 import com.kbquants.session.SimulatedMarketDataFeed;
@@ -78,7 +78,7 @@ public class Main {
         // an unreachable instrument master or a bad CAPITAL_PER_TRADE fails
         // at startup rather than on the first /buy, mid-trading-session.
         Function<TradeFillEvent, MarketDataFeed> feedFactory;
-        BuyRequestResolver buyRequestResolver;
+        TrackRequestResolver trackRequestResolver;
         ChargesService chargesService;
 
         // Shared between the monitor and position sizing so that switching
@@ -88,21 +88,21 @@ public class Main {
         if (liveData) {
             UpstoxDataCredentials dataCredentials = UpstoxDataCredentials.fromEnv();
             feedFactory = liveFeedFactory(dataCredentials);
-            buyRequestResolver = instrumentAwareResolver(dataCredentials, activeLadder);
+            trackRequestResolver = instrumentAwareResolver(dataCredentials, activeLadder);
             chargesService = new UpstoxChargesService(dataCredentials);
         } else {
             feedFactory = Main::simulatedFeed;
-            buyRequestResolver = new LiteralBuyRequestResolver();
+            trackRequestResolver = new LiteralTrackRequestResolver();
             chargesService = new EstimatedChargesService();
         }
 
         TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
-                buyRequestResolver, activeLadder, chargesService);
+                trackRequestResolver, activeLadder, chargesService);
 
         TelegramCommandHandler commandHandler = new TelegramCommandHandler(credentials, tradeMonitor);
         commandHandler.start();
 
-        log.info("xit-mc started in PAPER trading mode with {} market data. Send /buy <instrument> <price> <qty> to Telegram to begin.",
+        log.info("xit-mc started in PAPER trading mode with {} market data. Send /track <symbol> to Telegram to begin.",
                 liveData ? "LIVE Upstox" : "simulated");
 
         Runtime.getRuntime().addShutdownHook(new Thread(commandHandler::stop));
@@ -122,15 +122,15 @@ public class Main {
      * Symbol lookup plus price/quantity defaulting. Requires the instrument
      * master (a ~2 MB download, refreshed weekly on Wednesdays or on demand
      * via /refresh) and CAPITAL_PER_TRADE, which is what a bare
-     * {@code /buy <symbol>} sizes against.
+     * {@code /track <symbol>} sizes against.
      */
-    private static BuyRequestResolver instrumentAwareResolver(UpstoxDataCredentials dataCredentials,
+    private static TrackRequestResolver instrumentAwareResolver(UpstoxDataCredentials dataCredentials,
                                                               ActiveLadder activeLadder) throws IOException {
 
         String capital = System.getenv("CAPITAL_PER_TRADE");
         if (capital == null || capital.isBlank()) {
             throw new IllegalStateException(
-                    "Missing required environment variable: CAPITAL_PER_TRADE (used to size a bare /buy <symbol>)");
+                    "Missing required environment variable: CAPITAL_PER_TRADE (used to size a bare /track <symbol>)");
         }
 
         // Optional second ceiling. Where both apply the smaller wins, so
@@ -144,7 +144,7 @@ public class Main {
                     (int) (MilestoneLadder.optionsLadder().getHardStopPercent() * 100));
         }
 
-        return new InstrumentAwareBuyRequestResolver(
+        return new InstrumentAwareTrackRequestResolver(
                 InstrumentCatalog.loadFrom(new InstrumentMasterLoader()),
                 new UpstoxQuoteService(dataCredentials),
                 new PositionSizer(Double.parseDouble(capital), maxRiskPerTrade, activeLadder));

@@ -1,27 +1,33 @@
 # xit-mc — Development Documentation
 
-> Status snapshot as of 2026-08-06. This document describes what has actually been implemented in the codebase so far — not the target design (see PRODUCT_REQUIREMENTS.md for that). Sections are marked ✅ Implemented, 🟡 Partial (stub/scaffolded), or ⬜ Not started.
+> Status snapshot as of 2026-08-08. This document describes what has actually been implemented in the codebase so far — not the target design (see PRODUCT_REQUIREMENTS.md for that). Sections are marked ✅ Implemented, 🟡 Partial (stub/scaffolded), or ⬜ Not started.
 
 ## 1. What this project is
 
-`xit-mc` (Maven artifact `com.kbquants:xit-mc`) is a **trade exit management system**: it accepts a trade invocation (a confirmed broker fill, or a manual `/buy` command via Telegram), watches the live price, and manages the exit lifecycle — stop-loss, phase transitions, and profit-ownership locking — via a deterministic rules engine. It does not make entry decisions; see PRODUCT_REQUIREMENTS.md §2 for the full scope boundary.
+`xit-mc` (Maven artifact `com.kbquants:xit-mc`) is a **trade exit management system**: it accepts a trade invocation (a confirmed broker fill, or a manual `/track` command via Telegram), watches the live price, and manages the exit lifecycle — stop-loss, phase transitions, and profit-ownership locking — via a deterministic rules engine. It does not make entry decisions; see PRODUCT_REQUIREMENTS.md §2 for the full scope boundary.
 
-As of this update the project has a **runnable paper-trading MVP**: `java -jar target/xit-mc-1.0-SNAPSHOT.jar` starts a Telegram bot that accepts `/buy`, `/exit`, and `/status` commands, drives a simulated price feed, and runs the full exit engine end-to-end — no real broker required. Live-broker wiring (Upstox feeding real fills and prices into the same orchestrator) is Phase 3 (see IMPLEMENTATION_PLAN.md); the Upstox integration pieces from the previous milestone remain in place and broker-agnostic behind interfaces.
+As of this update the project runs **paper trades on live Upstox prices**. The Telegram bot accepts `/track`, `/exit`, `/status`, `/refresh`, `/ladder`, `/pause`, `/resume`, `/release`, `/observe` and `/manage`. With `MARKET_DATA=live` it resolves trading symbols against Upstox's instrument master, defaults the entry price to the LTP, sizes the position in whole lots from capital and risk, and measures every threshold net of broker-quoted costs.
+
+**It never places a buy order.** It is purely an exit engine: every position it manages was bought elsewhere and handed to it. The order side (real sell orders, `UpstoxOrderFillFeed`) is Phase 3 — see IMPLEMENTATION_PLAN.md.
 
 **Build:** Maven, Java 17, Lombok, Logback (JSON/structured logging via `logstash-logback-encoder`), Apache POI (declared, not yet used), the official Upstox Java SDK (`com.upstox.api:upstox-java-sdk:1.27`), Gson (pinned explicitly, used to parse Telegram's `getUpdates` response), JUnit 5. Telegram outbound messages use only the JDK's built-in `java.net.http.HttpClient`. `maven-shade-plugin` builds a runnable fat jar with `com.kbquants.Main` as the entry point.
-**Current state:** `mvn test` → **116/116 tests passing**, `BUILD SUCCESS`. `mvn package` produces a runnable jar.
+**Current state:** `mvn test` → **243/243 tests passing**, `BUILD SUCCESS`. `mvn package` produces a runnable jar.
 
 ## 2. Package layout
 
 ```
 com.kbquants
-├── Main           ✅  Entry point: wires paper-trading mode (Telegram + simulated feed)
+├── Main           ✅  Entry point: paper trading, with simulated or live Upstox market data
 ├── config         🟡  Configuration loading (all classes are empty stubs)
-├── domain         ✅  Core value/state objects (Phase, TradeContext, MilestoneLadder, enums, snapshots)
+├── domain         ✅  Core value/state objects (Phase, TradeContext, MilestoneLadder + named sets,
+│                      ActiveLadder, MonitorMode, enums)
 ├── engine         ✅  The exit/stop-loss/ownership rules engine, driven by MilestoneLadder
-├── live           ✅  Upstox broker implementations + TradeMonitor orchestrator
-├── notification   ✅  Telegram bot: outbound alerts (Notifier) + inbound commands (two-way control plane)
-├── session        ✅  Broker-agnostic interfaces (MarketDataFeed, OrderFillFeed, ...) + simulated/paper implementations
+├── instrument     ✅  Instrument master (download, weekly cache, symbol resolution) + lot- and
+│                      risk-aware position sizing + /track resolution
+├── live           ✅  Upstox implementations (market data, quotes, charges, auth) + TradeMonitor
+├── notification   ✅  Telegram bot: outbound alerts incl. inline keyboards + inbound commands
+├── session        ✅  Broker-agnostic interfaces (MarketDataFeed, OrderFillFeed, QuoteService,
+│                      ChargesService, BuyRequestResolver) + simulated/paper implementations
 └── simulation     ✅  Synthetic price generation, batch execution ("runner"), and reporting
     ├── report     ✅  Console / CSV / JSON formatting of results
     └── runner     ✅  Orchestration of Exit×Ownership combinations over a price path
@@ -35,8 +41,11 @@ com.kbquants
 | `Phase` (enum) | Trade lifecycle stage: `PHASE_1` (initial risk validation) → `PHASE_2` (base capital protection) → `PHASE_3` (profit protection) → `PHASE_4` (forced EOD exit, defined but not yet wired into transitions). |
 | `ExitModel` (enum) | Exit "personality": `CONSERVATIVE`, `MODERATE`, `AGGRESSIVE`. Currently just a tag threaded through the engine/metrics — no model-specific behavior branches on it yet (see §7 gaps). |
 | `OwnershipMode` (enum) | `CONTINUOUS` or `MILESTONE` — selects which `OwnershipStrategy` implementation is used. |
-| `Milestone` | Immutable single rung of the milestone ladder: a profit-from-entry `percent`, an optional `phaseTransition` it triggers, and an optional `ownershipLockPercent` it locks. |
-| `MilestoneLadder` | **New.** The single source of truth for every profit-from-entry threshold in the system. `defaultLadder()` provides `[0.5, 1, 2, 3, 5, 8, 13, 21, 34, 55]%`, where 5% triggers PHASE_2, 13% triggers PHASE_3 and locks 30% ownership, and 21/34/55% lock 50/70/85% ownership. `PhaseManager`, `MilestoneOwnershipStrategy`, and `ProfitMilestoneTracker` all read from the same ladder instance — change it once, all three follow. Previously these were three independent hardcoded threshold sets that could silently drift out of sync (phase triggers were 6%/13%, not on the notification ladder at all). |
+| `Milestone` | Immutable single rung: a **net-profit** `percent` (measured above `basePrice`, the cost-inclusive breakeven), an optional `phaseTransition` it triggers, and an optional `ownershipLockPercent` it locks. |
+| `MilestoneLadder` | The single source of truth for every threshold in the system, **including the hard stop** — which lives here rather than as a constant because 20% below entry is a disaster stop on an equity and a routine wiggle on an option premium. Two named sets: `EQUITY` `[1, 2, 3, 5, 8, 13, 21, 34, 55]%` with PHASE_2 at 2%, PHASE_3 at 5% and a 20% hard stop; `OPTIONS` `[1, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233]%` with PHASE_2 at 8%, PHASE_3 at 21% and a 40% hard stop. `PhaseManager`, `MilestoneOwnershipStrategy`, `ProfitMilestoneTracker` and `StopLossEngine` all read the same instance. |
+| `MilestoneSets` | The registry of selectable sets. Which one is active is a runtime choice (`/ladder`); what they contain is a code change, since the numbers encode trading intent worth reviewing in a diff. |
+| `ActiveLadder` | Volatile holder for the selected set, shared by `TradeMonitor` and `PositionSizer` so the hard stop used for sizing cannot drift from the one the engine enforces. |
+| `MonitorMode` (enum) | How far the engine may act on a trade: `MANAGED` (auto-exit), `OBSERVED` (report only, never exit), `RELEASED` (detached). Distinct from exiting — a released position stays open. |
 | `Candle5m` | Immutable OHLC + start/end timestamp for a completed 5-minute candle. Defined for future phase-transition/structured evaluation use; not yet consumed anywhere. |
 | `MarketSnapshot` | Immutable `(ltp, timestamp)` tick snapshot, intended for future tick-level/hybrid processing; not yet consumed. |
 
@@ -44,21 +53,25 @@ com.kbquants
 
 This is the heart of what's been built. It's a small, deterministic rules pipeline driven by `ExitEngine.onPriceUpdate(price, context)`, called once per price tick:
 
-1. **Hard safety stop** (`StopLossEngine.applyHardSafety`) — always sets a floor stop-loss at entry price − 20%, every tick, regardless of phase.
-2. **Phase transition** (`PhaseManager.evaluatePhaseTransition`) — trigger percentages now come from `MilestoneLadder`, not hardcoded constants:
-   - `PHASE_1 → PHASE_2` when price ≥ entry × 1.05 (+5%, was +6% prior to the ladder unification)
-   - `PHASE_2 → PHASE_3` when price ≥ entry × 1.13 (+13%, unchanged)
+Everything below measures from **`basePrice`, the cost-inclusive breakeven**, not the entry price. That is the whole difference between reporting gross and net: on a small position round-trip costs can exceed 1.5% of capital, enough for a gross gain to be a real loss.
+
+1. **Hard safety stop** (`StopLossEngine.applyHardSafety`) — floor stop-loss at entry price − the active set's hard stop (20% EQUITY, 40% OPTIONS), every tick, regardless of phase.
+2. **Phase transition** (`PhaseManager.evaluatePhaseTransition`) — trigger percentages come from `MilestoneLadder`:
+   - `PHASE_1 → PHASE_2` at basePrice × 1.02 (EQUITY) or × 1.08 (OPTIONS)
+   - `PHASE_2 → PHASE_3` at basePrice × 1.05 (EQUITY) or × 1.21 (OPTIONS)
    - `PHASE_3`/`PHASE_4` currently have no further automatic transition logic.
-3. **Base protection** (`StopLossEngine.applyBaseProtectionIfEligible`) — once in `PHASE_2`, ratchets the stop-loss up to the trade's `basePrice` (never below it, never backward).
-4. **Ownership strategy** (`OwnershipStrategy.apply`, only active in `PHASE_3`) — locks in a portion of open profit as the new stop-loss, via one of two pluggable strategies (factory-selected by `OwnershipStrategyFactory`):
-   - **`ContinuousOwnershipStrategy`** — locks a flat **30%** of open profit (price − basePrice) continuously once in Phase 3 (unaffected by the ladder — this strategy is intentionally not milestone-based).
-   - **`MilestoneOwnershipStrategy`** — locks an increasing % of open profit at fixed profit-from-entry milestones, now read from `MilestoneLadder.ownershipLockMap()`:
-     | Profit from entry | Ownership locked |
+3. **Base protection** (`StopLossEngine.applyBaseProtectionIfEligible`) — once in `PHASE_2`, ratchets the stop-loss up to `basePrice`, so reaching PHASE_2 genuinely means capital is safe rather than losing exactly the costs.
+4. **Ownership strategy** (`OwnershipStrategy.apply`, only active in `PHASE_3`) — locks a portion of **net** open profit as the new stop-loss, via one of two pluggable strategies (factory-selected by `OwnershipStrategyFactory`):
+   - **`ContinuousOwnershipStrategy`** — locks a flat **30%** of open profit continuously once in Phase 3 (intentionally not milestone-based).
+   - **`MilestoneOwnershipStrategy`** — locks an increasing share at milestones read from `MilestoneLadder.ownershipLockMap()`. The first lock always coincides with the PHASE_3 rung; a gap between them would be a dead zone where the stop sits at breakeven while profit runs:
+     | Net profit (EQUITY / OPTIONS) | Ownership locked |
      |---|---|
-     | ≥ 13% | 30% |
-     | ≥ 21% | 50% |
-     | ≥ 34% | 70% |
-     | ≥ 55% | 85% |
+     | ≥ 5% / 21% | 30% |
+     | ≥ 8% / 34% | 50% |
+     | ≥ 13% / 55% | 65% |
+     | ≥ 21% / 89% | 75% |
+     | ≥ 34% / 144% | 85% |
+     | ≥ 55% / 233% | 90% |
 
 All stop-loss writes go through `StopLossEngine.updateStopLoss`, which enforces a **monotonic ratchet** — a candidate SL is only applied if it's higher than the current one, so the stop-loss never moves against the trade.
 
@@ -76,7 +89,7 @@ This package holds every interface a broker or data source must implement to plu
 - `OrderFillFeed` / `TradeFillListener` / `TradeFillEvent` — **new, moved from `com.kbquants.live`.** `OrderFillFeed` is the broker-agnostic "where trade invocations come from" interface (`start(TradeFillListener)`, `stop()`). `TradeFillEvent` (orderId, instrumentKey, averagePrice, filledQuantity) and `TradeFillListener` were previously Upstox-adjacent classes living in the `live` package; they're genuinely broker-agnostic contracts and now live here, alongside `MarketDataFeed`. `UpstoxOrderFillFeed` (see §5.1) is the only real-broker implementation so far.
 - `DeterministicSimulationFeed` — feeds a fixed, pre-built `List<Double>` of prices sequentially with synthetic incrementing timestamps. Used for deterministic, reproducible tests of the engine end-to-end.
 - **`SimulatedMarketDataFeed`** — **new.** A `MarketDataFeed` implementation for paper trading: on `start()`, a background scheduled thread generates a new price every tick interval via a Gaussian random walk around the current price (`price += N(0,1) * volatility% * price`), floored above zero, and delivers it to the listener. Used by `Main` to drive paper trading without any broker.
-- **`NoOpOrderFillFeed`** — **new.** An `OrderFillFeed` that never produces fills; used in paper mode where trades are invoked directly via Telegram's `/buy` command rather than detected from a broker feed.
+- **`NoOpOrderFillFeed`** — **new.** An `OrderFillFeed` that never produces fills; used in paper mode where trades are invoked directly via Telegram's `/track` command rather than detected from a broker feed.
 
 **Test coverage:** `TradingSessionTest` (3), `DeterministicSimulationFeedTest` (1), `SimulatedMarketDataFeedTest` (3 — deterministic-random tick generation, price floor under extreme downward moves, input validation).
 
@@ -113,7 +126,7 @@ Command handling (via `TelegramCommandListener`):
 - `onExitAll()` — force-exits every open trade.
 - `onStatusRequested()` — reports instrument, entry, current price, phase, stop-loss, and order id for every open trade.
 
-**Test coverage:** `TradeMonitorTest` (11 tests) — fill → watch → milestone notify; duplicate-fill dedup; automatic stop-loss-triggered exit (and that no further processing happens after close); manual exit by order id; manual exit-all; status reporting (including the "no active trades" case); Telegram `/buy` producing a tracked trade. All via fake `OrderFillFeed`/`MarketDataFeed` — no network touched.
+**Test coverage:** `TradeMonitorTest` (11 tests) — fill → watch → milestone notify; duplicate-fill dedup; automatic stop-loss-triggered exit (and that no further processing happens after close); manual exit by order id; manual exit-all; status reporting (including the "no active trades" case); Telegram `/track` producing a tracked trade. All via fake `OrderFillFeed`/`MarketDataFeed` — no network touched.
 
 ## 6. Telegram: two-way control plane (`com.kbquants.notification`) — ✅ Implemented
 
@@ -128,14 +141,14 @@ Previously Telegram was outbound-only (alerts). It's now a full control plane: t
 
   | Command | Effect |
   |---|---|
-  | `/buy <instrumentKey> <price> <qty>` | Invoke a new trade |
+  | `/track <instrumentKey> <price> <qty>` | Invoke a new trade |
   | `/exit <orderId>` | Force-exit that trade |
   | `/exit all` (case-insensitive) | Force-exit every open trade |
   | `/status` | Report all open trades |
 
   JSON parsing of the `getUpdates` response uses Gson (already a transitive dependency of the Upstox SDK; pinned explicitly in `pom.xml` since it's now used directly).
 
-**Test coverage:** `TelegramCommandHandlerTest` (10 tests) — covers the pure `dispatch` logic exhaustively (valid/malformed `/buy`, `/exit <id>`, `/exit all` case-insensitivity, `/status`, unrecognized commands, null/blank text, extra whitespace tolerance). The actual HTTP long-polling loop is not unit-tested — same network caveat as §5.1 (`api.telegram.org` is blocked in this sandbox).
+**Test coverage:** `TelegramCommandHandlerTest` (10 tests) — covers the pure `dispatch` logic exhaustively (valid/malformed `/track`, `/exit <id>`, `/exit all` case-insensitivity, `/status`, unrecognized commands, null/blank text, extra whitespace tolerance). The actual HTTP long-polling loop is not unit-tested — same network caveat as §5.1 (`api.telegram.org` is blocked in this sandbox).
 
 ## 7. Paper trading entry point (`com.kbquants.Main`) — ✅ Implemented
 
@@ -189,7 +202,12 @@ Unchanged from the previous milestone.
 - **`CandleGenerator`** — still an empty stub.
 - **`hybridEnabled`/`hybridUpdateCount`/`atr`/`ownershipPercentage` fields on `TradeContext`** — still unused hooks.
 - **`PHASE_4` (forced EOD exit)** — still no automatic transition logic; only `ExitEngine.forceExit()` (now reachable live via Telegram `/exit`).
-- **Live broker mode is not wired into `Main`** — `Main` only supports `TRADING_MODE=paper`. Wiring `UpstoxOrderFillFeed` + `UpstoxMarketDataFeed` into the same `TradeMonitor` for live mode is Phase 3 (see IMPLEMENTATION_PLAN.md) — the pieces exist and are broker-agnostic-compatible, just not connected in `Main` yet.
+- **The order side is not wired into `Main`** — live *market data* is (`MARKET_DATA=live`), but `UpstoxOrderFillFeed` is still unused there, so trades only ever arrive via `/track`. Wiring it is Phase 3. When it happens, note that it streams fills for the **whole account**: adoption becomes opt-out, and `/pause` (or an explicit adopt step) is what prevents unrelated positions being managed.
+- **The app never places buy orders** — it is purely an exit engine, placing sell orders for positions bought elsewhere. `/track` declares an existing position rather than ordering anything; the name is a legacy misnomer.
+- **Ladder numbers are unvalidated** — the EQUITY/OPTIONS sets and their phase placements are reasoned starting points, not derived from data. The simulation layer cannot validate them either: it models GBM on the instrument, whereas an option premium is a convex function of the underlying plus time decay.
+- **Sell-side charges are quoted at the entry price** at fill time, since the exit price is unknown. Drift is ~₹0.31 near breakeven and ~₹89 at a +100% exit; the settled figure reported at exit corrects it.
+- **Order slicing is not implemented** — quantity is capped at the exchange freeze limit (27 lots for NIFTY) rather than split across orders, because multiple fills at different prices do not fit the single-entry-price model.
+- **Instrument master is refreshed weekly, not daily** — contracts listed since the last Wednesday will not resolve until `/refresh`.
 - **No real exit order placement** — `TradeMonitor` force-exits (marks the trade closed, sets SL to current price) but never places, modifies, or cancels a real broker order. Real limit/GTT exit orders are Phase 3.
 - **Position reconciliation on startup** — not implemented. If the process restarts, in-flight trades from a real broker are not automatically resumed (paper-trading trades are inherently ephemeral, so this doesn't apply there).
 - **The Upstox live feeds are untested against real network/servers** — see §5.1. Same for Telegram's `getUpdates`/`sendMessage` calls — see §6.
@@ -198,37 +216,49 @@ Unchanged from the previous milestone.
 ## 10. Test suite summary
 
 ```
-116 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+243 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |
 |---|---|
-| `TradeMonitorTest` | 11 |
-| `TelegramCommandHandlerTest` | 10 |
-| `MilestoneLadderTest` | 9 |
-| `ProfitMilestoneTrackerTest` | 7 |
+| `TelegramCommandHandlerTest` | 19 |
+| `InstrumentAwareBuyRequestResolverTest` | 16 |
+| `MilestoneSetsTest` | 14 |
+| `TradeMonitorTest` | 13 |
+| `InstrumentRegistryTest` | 12 |
+| `TradeMonitorControlTest` | 11 |
+| `MilestoneLadderTest` | 11 |
+| `PositionSizerTest` | 10 |
+| `TradeMonitorLadderTest` | 9 |
+| `StochasticPricePathGeneratorTest` | 8 |
+| `ProfitMilestoneTrackerTest` | 8 |
+| `PositionSizerRiskTest` | 8 |
 | `UpstoxMarketDataFeedTest` | 7 |
-| `ExitEngineTest` | 6 |
+| `TradeCostTest` | 7 |
+| `UpstoxOrderFillFeedTest` | 6 |
+| `UpstoxDataCredentialsTest` | 6 |
 | `StopLossEngineTest` | 6 |
+| `PhaseManagerTest` | 6 |
 | `MilestoneOwnershipStrategyTest` | 6 |
 | `MetricsCollectorTest` | 6 |
-| `UpstoxOrderFillFeedTest` | 6 |
+| `InstrumentMasterLoaderTest` | 6 |
+| `ExitEngineTest` | 6 |
+| `EstimatedChargesServiceTest` | 6 |
+| `TelegramNotifierTest` | 5 |
 | `ContinuousOwnershipStrategyTest` | 5 |
-| `PhaseManagerTest` | 5 |
-| `StochasticPricePathGeneratorTest` | 8 |
 | `UpstoxCredentialsTest` | 4 |
+| `InstrumentCatalogTest` | 4 |
 | `TradingSessionTest` | 3 |
+| `TelegramCredentialsTest` | 3 |
 | `SimulationReporterTest` | 3 |
 | `SimulatedMarketDataFeedTest` | 3 |
-| `TelegramCredentialsTest` | 3 |
 | `UpstoxAuthServiceTest` | 2 |
-| `TelegramNotifierTest` | 2 |
-| `DeterministicSimulationFeedTest` | 1 |
-| `ConsoleReportFormatterTest` | 1 |
-| `CsvReportFormatterTest` | 1 |
 | `JsonReportFormatterTest` | 1 |
+| `DeterministicSimulationFeedTest` | 1 |
+| `CsvReportFormatterTest` | 1 |
+| `ConsoleReportFormatterTest` | 1 |
 
-Run with: `mvn test`. Build a runnable jar with `mvn package` → `target/xit-mc-1.0-SNAPSHOT.jar`.
+Run with: `mvn test`. Build a runnable jar with `mvn package`.
 
 ## 11. Suggested next steps (see IMPLEMENTATION_PLAN.md for the full phased roadmap)
 

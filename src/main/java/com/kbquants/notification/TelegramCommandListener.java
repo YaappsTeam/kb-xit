@@ -8,12 +8,12 @@ package com.kbquants.notification;
 public interface TelegramCommandListener {
 
     /**
-     * Raw whitespace-separated arguments following "/buy", left
+     * Raw whitespace-separated arguments following "/track", left
      * uninterpreted on purpose: whether a trailing number is a quantity or
      * part of a multi-word symbol can only be decided against the
      * instrument master, which lives well below this interface.
      */
-    void onBuy(java.util.List<String> args);
+    void onTrack(java.util.List<String> args);
 
     void onExit(String orderId);
     void onExitAll();
@@ -30,4 +30,28 @@ public interface TelegramCommandListener {
 
     /** Make the named milestone set the active one for subsequent trades. */
     void onLadderSelected(String setName);
+
+    /**
+     * Stop or resume taking on new trades. Affects future invocations only
+     * -- trades already open keep being managed, which is why this is
+     * separate from releasing them.
+     */
+    void onAdoptionPaused(boolean paused);
+
+    /**
+     * Change how far the engine may act on a trade, without closing it.
+     *
+     * @param target  an orderId, or "all"
+     */
+    void onMonitorModeRequested(String target, com.kbquants.domain.MonitorMode mode);
+
+    /**
+     * Something command-shaped that matched nothing. Answered rather than
+     * ignored, so a typo cannot leave the user believing a trade is being
+     * watched when no command was dispatched.
+     */
+    void onUnknownCommand(String command);
+
+    /** List what the bot accepts. */
+    void onHelpRequested();
 }

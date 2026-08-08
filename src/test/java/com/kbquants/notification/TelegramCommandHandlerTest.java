@@ -19,8 +19,8 @@ class TelegramCommandHandlerTest {
         final List<String> events = new ArrayList<>();
 
         @Override
-        public void onBuy(List<String> args) {
-            events.add("buy:" + String.join("|", args));
+        public void onTrack(List<String> args) {
+            events.add("track:" + String.join("|", args));
         }
 
         @Override
@@ -52,16 +52,36 @@ class TelegramCommandHandlerTest {
         public void onLadderSelected(String setName) {
             events.add("ladderSelected:" + setName);
         }
+
+        @Override
+        public void onAdoptionPaused(boolean paused) {
+            events.add(paused ? "paused" : "resumed");
+        }
+
+        @Override
+        public void onMonitorModeRequested(String target, com.kbquants.domain.MonitorMode mode) {
+            events.add("mode:" + mode + ":" + target);
+        }
+
+        @Override
+        public void onUnknownCommand(String command) {
+            events.add("unknown:" + command);
+        }
+
+        @Override
+        public void onHelpRequested() {
+            events.add("help");
+        }
     }
 
     @Test
-    void shouldForwardBuyArgumentsUninterpreted() {
+    void shouldForwardTrackArgumentsUninterpreted() {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy NSE_EQ|INE848E01016 1500.50 10", listener);
+        TelegramCommandHandler.dispatch("/track NSE_EQ|INE848E01016 1500.50 10", listener);
 
-        assertEquals(List.of("buy:NSE_EQ|INE848E01016|1500.50|10"), listener.events);
+        assertEquals(List.of("track:NSE_EQ|INE848E01016|1500.50|10"), listener.events);
     }
 
     /**
@@ -75,9 +95,9 @@ class TelegramCommandHandlerTest {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy NIFTY 50", listener);
+        TelegramCommandHandler.dispatch("/track NIFTY 50", listener);
 
-        assertEquals(List.of("buy:NIFTY|50"), listener.events);
+        assertEquals(List.of("track:NIFTY|50"), listener.events);
     }
 
     @Test
@@ -85,19 +105,34 @@ class TelegramCommandHandlerTest {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy NIFTY50", listener);
+        TelegramCommandHandler.dispatch("/track NIFTY50", listener);
 
-        assertEquals(List.of("buy:NIFTY50"), listener.events);
+        assertEquals(List.of("track:NIFTY50"), listener.events);
     }
 
     @Test
-    void shouldIgnoreBuyCommandWithNoArguments() {
+    void shouldIgnoreTrackCommandWithNoArguments() {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("/buy", listener);
+        TelegramCommandHandler.dispatch("/track", listener);
 
         assertTrue(listener.events.isEmpty());
+    }
+
+    /**
+     * /buy no longer exists. It must be reported rather than ignored --
+     * silence would leave the user believing a position was being watched
+     * when nothing was dispatched.
+     */
+    @Test
+    void removedBuyCommandShouldBeReportedAsUnknown() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/buy NIFTY50", listener);
+
+        assertEquals(List.of("unknown:/buy"), listener.events);
     }
 
     @Test
@@ -194,11 +229,95 @@ class TelegramCommandHandlerTest {
     }
 
     @Test
-    void shouldIgnoreUnrecognizedCommand() {
+    void shouldDispatchPauseAndResume() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/pause", listener);
+        TelegramCommandHandler.dispatch("/resume", listener);
+
+        assertEquals(List.of("paused", "resumed"), listener.events);
+    }
+
+    @Test
+    void shouldDispatchMonitorModeCommands() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/release order-1", listener);
+        TelegramCommandHandler.dispatch("/observe order-1", listener);
+        TelegramCommandHandler.dispatch("/manage all", listener);
+
+        assertEquals(List.of("mode:RELEASED:order-1", "mode:OBSERVED:order-1", "mode:MANAGED:all"),
+                listener.events);
+    }
+
+    @Test
+    void shouldIgnoreMonitorModeCommandWithoutATarget() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/release", listener);
+
+        assertTrue(listener.events.isEmpty());
+    }
+
+    @Test
+    void shouldDispatchHelp() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/help", listener);
+
+        assertEquals(List.of("help"), listener.events);
+    }
+
+    /** Telegram sends /start when a user first opens the bot. */
+    @Test
+    void startShouldAlsoShowHelp() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/start", listener);
+
+        assertEquals(List.of("help"), listener.events);
+    }
+
+    /**
+     * Help that has drifted from the dispatch switch is worse than none,
+     * since it is trusted mid-trade.
+     */
+    @Test
+    void helpTextShouldMentionEveryAcceptedCommand() {
+
+        for (String command : List.of("/track", "/exit", "/status", "/ladder", "/refresh",
+                "/pause", "/resume", "/release", "/observe", "/manage")) {
+            assertTrue(TelegramCommandHandler.HELP_TEXT.contains(command),
+                    () -> command + " missing from help text");
+        }
+    }
+
+    @Test
+    void shouldReportUnrecognizedCommand() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/nosuchcommand", listener);
+
+        assertEquals(List.of("unknown:/nosuchcommand"), listener.events);
+    }
+
+    /**
+     * Only command-shaped input is answered, so the bot stays quiet in
+     * ordinary conversation rather than replying to every message.
+     */
+    @Test
+    void shouldStaySilentOnPlainChatMessages() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("hello", listener);
+        TelegramCommandHandler.dispatch("nifty looking strong today", listener);
 
         assertTrue(listener.events.isEmpty());
     }
@@ -219,8 +338,8 @@ class TelegramCommandHandlerTest {
 
         RecordingListener listener = new RecordingListener();
 
-        TelegramCommandHandler.dispatch("  /buy   NSE_EQ|INE848E01016   1500   10  ", listener);
+        TelegramCommandHandler.dispatch("  /track   NSE_EQ|INE848E01016   1500   10  ", listener);
 
-        assertEquals(List.of("buy:NSE_EQ|INE848E01016|1500|10"), listener.events);
+        assertEquals(List.of("track:NSE_EQ|INE848E01016|1500|10"), listener.events);
     }
 }

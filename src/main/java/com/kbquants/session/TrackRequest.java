@@ -12,7 +12,7 @@ import lombok.Getter;
  * below one lot) that must be reported rather than thrown.
  */
 @Getter
-public final class BuyRequest {
+public final class TrackRequest {
 
     private final boolean accepted;
     private final String instrumentKey;
@@ -23,7 +23,7 @@ public final class BuyRequest {
     private final String note;
     private final String rejectionReason;
 
-    private BuyRequest(boolean accepted, String instrumentKey, String displaySymbol, double price,
+    private TrackRequest(boolean accepted, String instrumentKey, String displaySymbol, double price,
                        int quantity, double tickSize, String note, String rejectionReason) {
         this.accepted = accepted;
         this.instrumentKey = instrumentKey;
@@ -35,16 +35,16 @@ public final class BuyRequest {
         this.rejectionReason = rejectionReason;
     }
 
-    public static BuyRequest accepted(String instrumentKey, String displaySymbol, double price, int quantity, String note) {
+    public static TrackRequest accepted(String instrumentKey, String displaySymbol, double price, int quantity, String note) {
         return accepted(instrumentKey, displaySymbol, price, quantity, 0, note);
     }
 
-    public static BuyRequest accepted(String instrumentKey, String displaySymbol, double price, int quantity,
+    public static TrackRequest accepted(String instrumentKey, String displaySymbol, double price, int quantity,
                                       double tickSize, String note) {
-        return new BuyRequest(true, instrumentKey, displaySymbol, price, quantity, tickSize, note, null);
+        return new TrackRequest(true, instrumentKey, displaySymbol, price, quantity, tickSize, note, null);
     }
 
-    public static BuyRequest rejected(String reason) {
-        return new BuyRequest(false, null, null, 0, 0, 0, null, reason);
+    public static TrackRequest rejected(String reason) {
+        return new TrackRequest(false, null, null, 0, 0, 0, null, reason);
     }
 }

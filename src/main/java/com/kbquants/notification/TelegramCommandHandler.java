@@ -1,6 +1,7 @@
 package com.kbquants.notification;
 
 import com.google.gson.Gson;
+import com.kbquants.domain.MonitorMode;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -33,6 +34,41 @@ public class TelegramCommandHandler {
 
     /** Prefix on inline-keyboard callback tokens for milestone-set choices. */
     public static final String LADDER_CALLBACK_PREFIX = "ladder:";
+
+    /**
+     * Lives next to the dispatch switch below so the two are updated
+     * together -- help that has drifted from what the bot actually accepts
+     * is worse than none, since it is trusted mid-trade.
+     */
+    // Laid out with separators rather than aligned columns: Telegram
+    // renders messages in a proportional font, so padded columns arrive
+    // ragged.
+    public static final String HELP_TEXT = String.join(System.lineSeparator(),
+            "xit-mc — exit management. It never buys; it manages the exit of positions you already hold.",
+            "",
+            "TRACK A POSITION",
+            "/track <symbol> — price = last traded, quantity sized from your capital and risk",
+            "/track <symbol> <qty> — explicit quantity",
+            "/track <symbol> <price> <qty> — fully explicit; the only form with simulated data",
+            "Symbols ignore case and spaces, e.g. nifty25000ce18aug26",
+            "",
+            "CLOSE A POSITION",
+            "/exit <orderId> — sell now",
+            "/exit all — sell everything open",
+            "",
+            "STEP BACK WITHOUT SELLING",
+            "/observe <orderId>|all — keep the alerts, no automatic exit",
+            "/release <orderId>|all — stop watching entirely; position stays open",
+            "/manage <orderId>|all — hand it back to the engine",
+            "/pause, /resume — stop or resume taking on new trades",
+            "",
+            "SETTINGS",
+            "/status — open trades: entry, breakeven, phase, stop, mode",
+            "/ladder — choose the milestone set (buttons)",
+            "/ladder <name> — choose it directly",
+            "/refresh — re-fetch the instrument master now",
+            "",
+            "Every percentage reported is net of brokerage and taxes.");
 
     private final TelegramCredentials credentials;
     private final TelegramCommandListener listener;
@@ -155,12 +191,18 @@ public class TelegramCommandHandler {
         String[] parts = text.trim().split("\\s+");
 
         switch (parts[0]) {
-            case "/buy" -> dispatchBuy(parts, text, listener);
+            case "/help", "/start" -> listener.onHelpRequested();
+            case "/track" -> dispatchTrack(parts, text, listener);
             case "/exit" -> dispatchExit(parts, text, listener);
             case "/status" -> listener.onStatusRequested();
             case "/refresh" -> listener.onRefreshInstruments();
             case "/ladder" -> dispatchLadder(parts, listener);
-            default -> log.debug("Ignoring unrecognized command: {}", text);
+            case "/pause" -> listener.onAdoptionPaused(true);
+            case "/resume" -> listener.onAdoptionPaused(false);
+            case "/release" -> dispatchMode(parts, rawText(text), MonitorMode.RELEASED, listener);
+            case "/observe" -> dispatchMode(parts, rawText(text), MonitorMode.OBSERVED, listener);
+            case "/manage" -> dispatchMode(parts, rawText(text), MonitorMode.MANAGED, listener);
+            default -> dispatchUnknown(parts[0], listener);
         }
     }
 
@@ -171,12 +213,12 @@ public class TelegramCommandHandler {
      * can contain spaces ("NSE_INDEX|Nifty 50", "NIFTY 50"), and a trailing
      * number may be a quantity or part of the symbol itself.
      */
-    private static void dispatchBuy(String[] parts, String rawText, TelegramCommandListener listener) {
+    private static void dispatchTrack(String[] parts, String rawText, TelegramCommandListener listener) {
         if (parts.length < 2) {
-            log.warn("Malformed /buy command (expected /buy <symbol> [price] [qty]): {}", rawText);
+            log.warn("Malformed {} command (expected /track <symbol> [price] [qty]): {}", parts[0], rawText);
             return;
         }
-        listener.onBuy(List.of(Arrays.copyOfRange(parts, 1, parts.length)));
+        listener.onTrack(List.of(Arrays.copyOfRange(parts, 1, parts.length)));
     }
 
     /**
@@ -190,6 +232,44 @@ public class TelegramCommandHandler {
         } else {
             listener.onLadderSelected(parts[1]);
         }
+    }
+
+    private static String rawText(String text) {
+        return text;
+    }
+
+    /**
+     * Anything starting with "/" was meant as a command, so a
+     * typo -- or a name that no longer exists -- gets answered rather than
+     * silently dropped. Staying quiet is the dangerous option here: the
+     * user would believe a position was being watched when nothing had
+     * been dispatched.
+     * <p>
+     * Ordinary chat is left alone; only command-shaped input is answered,
+     * so the bot does not respond to every message in the thread.
+     */
+    private static void dispatchUnknown(String command, TelegramCommandListener listener) {
+        if (!command.startsWith("/")) {
+            log.debug("Ignoring non-command message: {}", command);
+            return;
+        }
+        log.warn("Unrecognized command: {}", command);
+        listener.onUnknownCommand(command);
+    }
+
+    /**
+     * These never close a position -- they only change how far the engine
+     * may act on it. That is the whole point: /exit sells, these hand the
+     * trade back.
+     */
+    private static void dispatchMode(String[] parts, String rawText, MonitorMode mode,
+                                     TelegramCommandListener listener) {
+        if (parts.length != 2) {
+            log.warn("Malformed {} command (expected {} <orderId> or {} all): {}",
+                    parts[0], parts[0], parts[0], rawText);
+            return;
+        }
+        listener.onMonitorModeRequested(parts[1], mode);
     }
 
     /**
