@@ -123,30 +123,24 @@ public class TelegramCommandHandler {
             case "/buy" -> dispatchBuy(parts, text, listener);
             case "/exit" -> dispatchExit(parts, text, listener);
             case "/status" -> listener.onStatusRequested();
+            case "/refresh" -> listener.onRefreshInstruments();
             default -> log.debug("Ignoring unrecognized command: {}", text);
         }
     }
 
     /**
-     * Parsed right-to-left rather than left-to-right: price and quantity are
-     * always the last two tokens, and everything between "/buy" and them is
-     * the instrument key. Some Upstox instrument keys contain spaces --
-     * notably the indices, e.g. "NSE_INDEX|Nifty 50" -- so a fixed
-     * four-token split would reject them as malformed.
+     * Arguments are passed through untouched rather than split into
+     * instrument/price/quantity here. Both halves of that split are
+     * genuinely ambiguous without the instrument master: keys and symbols
+     * can contain spaces ("NSE_INDEX|Nifty 50", "NIFTY 50"), and a trailing
+     * number may be a quantity or part of the symbol itself.
      */
     private static void dispatchBuy(String[] parts, String rawText, TelegramCommandListener listener) {
-        if (parts.length < 4) {
-            log.warn("Malformed /buy command (expected /buy <instrument> <price> <qty>): {}", rawText);
+        if (parts.length < 2) {
+            log.warn("Malformed /buy command (expected /buy <symbol> [price] [qty]): {}", rawText);
             return;
         }
-        try {
-            String instrumentKey = String.join(" ", Arrays.copyOfRange(parts, 1, parts.length - 2));
-            double price = Double.parseDouble(parts[parts.length - 2]);
-            int quantity = Integer.parseInt(parts[parts.length - 1]);
-            listener.onBuy(instrumentKey, price, quantity);
-        } catch (NumberFormatException e) {
-            log.warn("Malformed /buy command (invalid price/qty): {}", rawText);
-        }
+        listener.onBuy(List.of(Arrays.copyOfRange(parts, 1, parts.length)));
     }
 
     private static void dispatchExit(String[] parts, String rawText, TelegramCommandListener listener) {

@@ -108,15 +108,59 @@ export MARKET_DATA="live"
 export UPSTOX_ANALYTICS_TOKEN="your-upstox-analytics-token-here"
 ```
 
-You should see `... started in PAPER trading mode with LIVE Upstox market data`. Then `/buy` with a real instrument key — the entry price you pass is your declared entry, and live ticks are compared against it:
+You should see `... started in PAPER trading mode with LIVE Upstox market data`. Live mode also needs `CAPITAL_PER_TRADE` — see the next section, which covers how `/buy` is used from here on.
+
+Ticks only arrive while the market is open, so outside market hours the engine sits idle rather than reporting an error.
+
+## Symbols, prices and lot sizing (live mode)
+
+Typing `NSE_FO|45148` while scalping is not realistic, so in live mode `/buy` takes a **trading symbol** and fills in the rest:
 
 ```
-/buy NSE_INDEX|Nifty 50 25000 50
+/buy nifty25000ce18aug26        price = LTP, quantity = capital ÷ lot cost
+/buy ACC 25                     quantity 25, price = LTP
+/buy ACC 1850.5 25              both explicit
+/buy NSE_EQ|INE012A01025 …      raw instrument key still works
 ```
 
-Note that instrument keys for indices contain a space (`NSE_INDEX|Nifty 50`); `/buy` handles that — price and quantity are read as the last two values, so the key can be multi-word. Ticks only arrive while the market is open, so outside market hours the engine sits idle rather than reporting an error.
+Matching ignores case and spaces, so `NIFTY 25000 CE 18 AUG 26` and `nifty25000ce18aug26` are the same instrument, and `NIFTY50` finds the index. Symbols are looked up in a local copy of Upstox's instrument master (~2 MB, ~43k instruments, cached in `~/.xit-mc/instruments`) — a map lookup, not an API call, so it costs nothing in the hot path. With exactly one trailing number it is read as a **quantity**, never a price.
 
-Indices can be streamed but not traded — orders would go on the corresponding futures/options contract. That distinction only starts to matter at Phase 3.
+**Quantity is sized in whole lots**, which matters for F&O where quantity must be a multiple of the contract lot:
+
+```
+lots = floor(CAPITAL_PER_TRADE / (ltp × lotSize))     capped at floor(freezeQty / lotSize)
+```
+
+Equities have `lotSize = 1`, so the same formula gives plain capital ÷ price. Worked examples at `CAPITAL_PER_TRADE=50000`:
+
+| `/buy` | LTP | Lot | Result |
+|---|---|---|---|
+| `ACC` | 1,362.80 | 1 | 36 → ₹49,061 |
+| `nifty25000ce18aug26` | 55.30 | 65 | 13 lots = 845 → ₹46,729 |
+| `nifty25000pe18aug26` | 431.45 | 65 | 1 lot = 65 → ₹28,044 |
+
+Two deliberate behaviours:
+
+- **Capped, not sliced.** Exchanges reject single orders above a freeze quantity (1,755 for NIFTY, i.e. 27 lots). When your capital would buy more — routine on expiry days — the order is capped at that limit rather than split into several. Slicing is a planned enhancement; multiple fills at different prices don't fit the engine's single-entry-price model yet.
+- **Refused, not zero-sized.** If capital won't cover even one lot, `/buy` reports why instead of opening a zero-quantity trade.
+
+Indices are streamable but **cannot be bought** — `/buy NIFTY50` is refused, since a position exists only in the corresponding option or future.
+
+A handful of trading symbols are ambiguous (`CHOLAFIN`, `MOTHERSON`, `ELECTCAST`, `IMC1`, `SILVER`). Rather than guess, `/buy` lists the candidates and asks for the full instrument key.
+
+In simulated mode there is no instrument master and no price source, so `/buy` still requires `<instrumentKey> <price> <qty>` in full.
+
+### Instrument master refresh
+
+The master refreshes **weekly, on Wednesdays** — the cache is stamped with the most recent Wednesday, so the first run on or after one downloads and every run until the next reads from disk. That keeps the ~2 MB download and 37 MB parse off the VM on the other six days.
+
+The trade-off: between refreshes, contracts listed since Wednesday won't resolve, and expired ones linger. When you need one immediately:
+
+```
+/refresh
+```
+
+That forces a download regardless of schedule and takes effect on the next command. If it fails, the previous master stays loaded — stale beats none mid-session.
 
 ## Setting up your Telegram bot
 
@@ -128,6 +172,7 @@ Indices can be streamed but not traded — orders would go on the corresponding 
    buy - Invoke a trade: /buy <instrument> <price> <qty>
    exit - Force-exit a trade: /exit <orderId> or /exit all
    status - List active trades
+   refresh - Re-fetch the instrument master now
    ```
    This makes the commands show up as autocomplete suggestions in the chat.
 
@@ -135,15 +180,18 @@ Indices can be streamed but not traded — orders would go on the corresponding 
 
 | Command | Effect |
 |---|---|
-| `/buy <instrumentKey> <price> <qty>` | Invoke a new (paper) trade |
+| `/buy <symbol>` | Invoke a new (paper) trade at LTP, sized from `CAPITAL_PER_TRADE` (live mode) |
+| `/buy <symbol> <qty>` | As above with an explicit quantity |
+| `/buy <symbol> <price> <qty>` | Fully explicit; the only form available in simulated mode |
 | `/exit <orderId>` | Force-exit that trade |
 | `/exit all` | Force-exit every open trade |
 | `/status` | Report all open trades: instrument, entry, current price, phase, stop-loss |
+| `/refresh` | Re-fetch the instrument master now, instead of waiting for Wednesday |
 
 ## Running tests
 
 ```bash
-mvn test              # full suite (124 tests)
+mvn test              # full suite (172 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 
@@ -153,6 +201,10 @@ mvn test -Dtest=PhaseManagerTest   # a single test class
 - **`TRADING_MODE=... is not supported yet`** — only `paper` is wired up right now; leave `TRADING_MODE` unset (it defaults to `paper`) or set it explicitly to `paper`. Note this is about *order execution*, and is separate from `MARKET_DATA` — live prices work fine in paper mode.
 - **`Missing required environment variable: UPSTOX_ANALYTICS_TOKEN`** — you set `MARKET_DATA=live` without a token. This is checked at startup rather than on your first `/buy`, so it fails immediately instead of mid-session.
 - **`MARKET_DATA=... is not recognised`** — expected `simulated` (default) or `live`.
+- **`Missing required environment variable: CAPITAL_PER_TRADE`** — live mode needs it to size a bare `/buy <symbol>`. Set it in `run.ps1` / `run.sh`.
+- **`unknown instrument: X`** — the symbol isn't in the master. Check spelling against the trading symbol Upstox uses; option symbols look like `NIFTY 25000 CE 18 AUG 26` (spaces optional).
+- **`X is an index and cannot be bought`** — expected; trade the option or future instead.
+- **`one lot of X costs … which exceeds capital per trade`** — raise `CAPITAL_PER_TRADE`, or pass an explicit quantity to override sizing entirely.
 - **Live mode connects but no ticks arrive** — the market is likely closed, or the instrument key is wrong. Check the key against Upstox's instrument list; the index is `NSE_INDEX|Nifty 50`, not `NIFTY50`.
 - **No jar found / `run.sh` fails immediately** — run `mvn package` first; `run.sh` looks for `target/xit-mc-*.jar`.
 - **Bot doesn't reply to `/buy`** — confirm you've messaged the bot at least once already (step 2 above) and that `TELEGRAM_CHAT_ID` is your own numeric id, not the bot's.

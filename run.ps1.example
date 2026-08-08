@@ -22,6 +22,12 @@ $env:TELEGRAM_CHAT_ID = "your-telegram-chat-id-here"
 # $env:MARKET_DATA = "live"
 # $env:UPSTOX_ANALYTICS_TOKEN = "your-upstox-analytics-token-here"
 
+# Rupees to deploy per trade, used to size a bare "/buy <symbol>" when you
+# don't pass a quantity. Required whenever MARKET_DATA=live. Sizing is in
+# whole lots and is capped at the exchange freeze limit (27 lots for NIFTY)
+# rather than being split across several orders.
+# $env:CAPITAL_PER_TRADE = "50000"
+
 # Newest by write time, not first alphabetically: after a version bump
 # target/ can hold jars from several versions (plus the shade plugin's
 # -shaded copy), and picking alphabetically silently runs a stale build.

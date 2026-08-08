@@ -1,6 +1,8 @@
 package com.kbquants.live;
 
 import com.kbquants.notification.Notifier;
+import com.kbquants.session.BuyRequestResolver;
+import com.kbquants.session.LiteralBuyRequestResolver;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.PriceListener;
@@ -21,6 +23,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * implementations, so no real network connection is ever attempted.
  */
 class TradeMonitorTest {
+
+    /**
+     * These tests exercise TradeMonitor's trade lifecycle, not symbol
+     * resolution, so they use the literal resolver: /buy arguments are
+     * taken exactly as given, with no instrument master or price lookup.
+     */
+    private static final BuyRequestResolver RESOLVER = new LiteralBuyRequestResolver();
 
     private static class FakeOrderFillFeed implements OrderFillFeed {
         TradeFillListener capturedListener;
@@ -62,7 +71,7 @@ class TradeMonitorTest {
 
         new TradeMonitor(orderFillFeed,
                 fill -> feedsByInstrument.computeIfAbsent(fill.getInstrumentKey(), k -> new FakeFeed()),
-                notifier);
+                notifier, RESOLVER);
 
         orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
 
@@ -79,7 +88,7 @@ class TradeMonitorTest {
         FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
         FakeFeed feed = new FakeFeed();
 
-        new TradeMonitor(orderFillFeed, fill -> feed, notifier);
+        new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
 
         orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
         notifier.messages.clear();
@@ -101,7 +110,7 @@ class TradeMonitorTest {
                     feedCreationCount.merge(fill.getInstrumentKey(), 1, Integer::sum);
                     return new FakeFeed();
                 },
-                message -> { });
+                message -> { }, RESOLVER);
 
         TradeFillEvent fill = new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10);
         orderFillFeed.capturedListener.onFill(fill);
@@ -117,7 +126,7 @@ class TradeMonitorTest {
         FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
         FakeFeed feed = new FakeFeed();
 
-        new TradeMonitor(orderFillFeed, fill -> feed, notifier);
+        new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
 
         orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
         notifier.messages.clear();
@@ -140,7 +149,7 @@ class TradeMonitorTest {
         FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
         FakeFeed feed = new FakeFeed();
 
-        TradeMonitor monitor = new TradeMonitor(orderFillFeed, fill -> feed, notifier);
+        TradeMonitor monitor = new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
 
         orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
         feed.capturedListener.onPrice(105.0, 1L);
@@ -160,7 +169,7 @@ class TradeMonitorTest {
     void shouldReportNoTradeFoundForUnknownOrderId() {
 
         RecordingNotifier notifier = new RecordingNotifier();
-        TradeMonitor monitor = new TradeMonitor(new FakeOrderFillFeed(), fill -> new FakeFeed(), notifier);
+        TradeMonitor monitor = new TradeMonitor(new FakeOrderFillFeed(), fill -> new FakeFeed(), notifier, RESOLVER);
 
         monitor.onExit("does-not-exist");
 
@@ -176,7 +185,7 @@ class TradeMonitorTest {
         Map<String, FakeFeed> feeds = new HashMap<>();
 
         TradeMonitor monitor = new TradeMonitor(orderFillFeed,
-                fill -> feeds.computeIfAbsent(fill.getInstrumentKey(), k -> new FakeFeed()), notifier);
+                fill -> feeds.computeIfAbsent(fill.getInstrumentKey(), k -> new FakeFeed()), notifier, RESOLVER);
 
         orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "INSTR_A", 100.0, 10));
         orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-2", "INSTR_B", 200.0, 5));
@@ -191,7 +200,7 @@ class TradeMonitorTest {
     void shouldReportNoActiveTradesToExitAllWhenNoneAreOpen() {
 
         RecordingNotifier notifier = new RecordingNotifier();
-        TradeMonitor monitor = new TradeMonitor(new FakeOrderFillFeed(), fill -> new FakeFeed(), notifier);
+        TradeMonitor monitor = new TradeMonitor(new FakeOrderFillFeed(), fill -> new FakeFeed(), notifier, RESOLVER);
 
         monitor.onExitAll();
 
@@ -206,9 +215,9 @@ class TradeMonitorTest {
         Map<String, FakeFeed> feeds = new HashMap<>();
 
         TradeMonitor monitor = new TradeMonitor(new FakeOrderFillFeed(),
-                fill -> feeds.computeIfAbsent(fill.getInstrumentKey(), k -> new FakeFeed()), notifier);
+                fill -> feeds.computeIfAbsent(fill.getInstrumentKey(), k -> new FakeFeed()), notifier, RESOLVER);
 
-        monitor.onBuy("NSE_EQ|INE848E01016", 1500.0, 10);
+        monitor.onBuy(List.of("NSE_EQ|INE848E01016", "1500.0", "10"));
 
         assertTrue(feeds.containsKey("NSE_EQ|INE848E01016"));
         assertEquals(1, notifier.messages.size());
@@ -222,7 +231,7 @@ class TradeMonitorTest {
         FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
         FakeFeed feed = new FakeFeed();
 
-        TradeMonitor monitor = new TradeMonitor(orderFillFeed, fill -> feed, notifier);
+        TradeMonitor monitor = new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
 
         orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
         feed.capturedListener.onPrice(102.0, 1L);
@@ -239,7 +248,7 @@ class TradeMonitorTest {
     void shouldReportNoActiveTradesOnStatusRequestWhenNoneOpen() {
 
         RecordingNotifier notifier = new RecordingNotifier();
-        TradeMonitor monitor = new TradeMonitor(new FakeOrderFillFeed(), fill -> new FakeFeed(), notifier);
+        TradeMonitor monitor = new TradeMonitor(new FakeOrderFillFeed(), fill -> new FakeFeed(), notifier, RESOLVER);
 
         monitor.onStatusRequested();
 
