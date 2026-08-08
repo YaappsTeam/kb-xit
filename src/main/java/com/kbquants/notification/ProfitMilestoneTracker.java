@@ -5,28 +5,38 @@ import com.kbquants.domain.MilestoneLadder;
 import java.util.Objects;
 import java.util.OptionalDouble;
 
+/**
+ * Fires each profit milestone exactly once, ascending.
+ * <p>
+ * Thresholds are measured from basePrice -- the cost-inclusive breakeven --
+ * so a reported "+1%" is 1% of money kept after brokerage and taxes, not a
+ * gross figure that still has costs to come out of it. On a small position
+ * round-trip costs can exceed 1.5% of capital, which is enough for a gross
+ * gain to be a net loss; reporting from entry price would announce a profit
+ * on a losing trade.
+ */
 public class ProfitMilestoneTracker {
 
-    private final double entryPrice;
+    private final double basePrice;
     private final double[] thresholdsPercent;
     private int nextThresholdIndex = 0;
 
-    public ProfitMilestoneTracker(double entryPrice) {
-        this(entryPrice, MilestoneLadder.defaultLadder());
+    public ProfitMilestoneTracker(double basePrice) {
+        this(basePrice, MilestoneLadder.defaultLadder());
     }
 
-    public ProfitMilestoneTracker(double entryPrice, MilestoneLadder ladder) {
-        this(entryPrice, ladder.allThresholdsPercent());
+    public ProfitMilestoneTracker(double basePrice, MilestoneLadder ladder) {
+        this(basePrice, ladder.allThresholdsPercent());
     }
 
-    public ProfitMilestoneTracker(double entryPrice, double[] thresholdsPercent) {
-        this.entryPrice = entryPrice;
+    public ProfitMilestoneTracker(double basePrice, double[] thresholdsPercent) {
+        this.basePrice = basePrice;
         this.thresholdsPercent = Objects.requireNonNull(thresholdsPercent, "thresholdsPercent must not be null").clone();
     }
 
     public OptionalDouble checkAndAdvance(double currentPrice) {
 
-        double profitPercent = (currentPrice - entryPrice) / entryPrice * 100.0;
+        double profitPercent = (currentPrice - basePrice) / basePrice * 100.0;
 
         double highestNewlyCrossed = Double.NaN;
 

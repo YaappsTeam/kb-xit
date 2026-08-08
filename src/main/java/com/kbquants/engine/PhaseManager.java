@@ -31,10 +31,17 @@ public class PhaseManager {
         }
     }
 
+    /**
+     * Thresholds are measured from basePrice, not entryPrice: basePrice is
+     * the cost-inclusive breakeven, so "up 2%" means 2% of money actually
+     * kept rather than 2% gross with brokerage and taxes still to come.
+     * On a small position those costs can exceed 1.5% of capital, enough to
+     * make a gross gain a net loss.
+     */
     private void handlePhase1(double currentPrice, TradeContext context) {
 
         double triggerPrice =
-                context.getEntryPrice() * (1 + phase2TriggerFraction);
+                context.getBasePrice() * (1 + phase2TriggerFraction);
 
         if (currentPrice >= triggerPrice) {
             context.setCurrentPhase(Phase.PHASE_2);
@@ -44,7 +51,7 @@ public class PhaseManager {
     private void handlePhase2(double currentPrice, TradeContext context) {
 
         double triggerPrice =
-                context.getEntryPrice() * (1 + phase3TriggerFraction);
+                context.getBasePrice() * (1 + phase3TriggerFraction);
 
         if (currentPrice >= triggerPrice) {
             context.setCurrentPhase(Phase.PHASE_3);

@@ -12,7 +12,10 @@ import com.kbquants.notification.TelegramCommandHandler;
 import com.kbquants.notification.TelegramCommandListener;
 import com.kbquants.session.BuyRequest;
 import com.kbquants.session.BuyRequestResolver;
+import com.kbquants.session.ChargesService;
+import com.kbquants.session.EstimatedChargesService;
 import com.kbquants.session.MarketDataFeed;
+import com.kbquants.session.TradeCost;
 import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.TradeFillEvent;
 import lombok.extern.slf4j.Slf4j;
@@ -51,6 +54,7 @@ public class TradeMonitor implements TelegramCommandListener {
     private final Function<TradeFillEvent, MarketDataFeed> feedFactory;
     private final MilestoneLadder ladder;
     private final BuyRequestResolver buyRequestResolver;
+    private final ChargesService chargesService;
     private final Map<String, ActiveTrade> activeTrades = new ConcurrentHashMap<>();
 
     /**
@@ -63,11 +67,19 @@ public class TradeMonitor implements TelegramCommandListener {
 
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                         Notifier notifier, BuyRequestResolver buyRequestResolver) {
-        this(orderFillFeed, feedFactory, notifier, buyRequestResolver, MilestoneLadder.defaultLadder());
+        this(orderFillFeed, feedFactory, notifier, buyRequestResolver, MilestoneLadder.defaultLadder(),
+                new EstimatedChargesService());
     }
 
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
-                         Notifier notifier, BuyRequestResolver buyRequestResolver, MilestoneLadder ladder) {
+                        Notifier notifier, BuyRequestResolver buyRequestResolver, MilestoneLadder ladder) {
+        this(orderFillFeed, feedFactory, notifier, buyRequestResolver, ladder, new EstimatedChargesService());
+    }
+
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, BuyRequestResolver buyRequestResolver, MilestoneLadder ladder,
+                         ChargesService chargesService) {
+        this.chargesService = Objects.requireNonNull(chargesService, "chargesService must not be null");
         this.feedFactory = Objects.requireNonNull(feedFactory, "feedFactory must not be null");
         this.notifier = Objects.requireNonNull(notifier, "notifier must not be null");
         this.buyRequestResolver = Objects.requireNonNull(buyRequestResolver, "buyRequestResolver must not be null");
@@ -82,22 +94,34 @@ public class TradeMonitor implements TelegramCommandListener {
         // the tracker on different ladders.
         MilestoneLadder ladderForTrade = activeLadder;
 
+        // basePrice is the cost-inclusive breakeven, not the entry price:
+        // capital is only genuinely preserved once brokerage, STT, exchange
+        // charges, GST and stamp duty are covered. Everything downstream --
+        // phase transitions, milestone notifications, ownership locks --
+        // measures from here, so every percentage reported is net.
+        TradeCost cost = chargesService.roundTripCost(
+                fill.getInstrumentKey(), fill.getAveragePrice(), fill.getFilledQuantity());
+        double breakeven = cost.breakevenPrice(fill.getAveragePrice());
+
         TradeContext context = new TradeContext(
-                fill.getOrderId(), fill.getAveragePrice(), fill.getAveragePrice(),
+                fill.getOrderId(), fill.getAveragePrice(), breakeven,
                 fill.getFilledQuantity(), ExitModel.MODERATE, OwnershipMode.MILESTONE);
 
         ActiveTrade trade = new ActiveTrade(fill, context, new ExitEngine(context, ladderForTrade),
-                new ProfitMilestoneTracker(fill.getAveragePrice(), ladderForTrade));
+                new ProfitMilestoneTracker(breakeven, ladderForTrade), cost);
 
         if (activeTrades.putIfAbsent(fill.getOrderId(), trade) != null) {
             log.debug("Ignoring duplicate fill event for orderId={}", fill.getOrderId());
             return;
         }
 
-        log.info("Tracking new trade: orderId={} instrument={} entryPrice={}",
-                fill.getOrderId(), fill.getInstrumentKey(), fill.getAveragePrice());
-        notifier.send(String.format("%s: now tracking (entry=%.2f, qty=%d, orderId=%s)",
-                fill.getInstrumentKey(), fill.getAveragePrice(), fill.getFilledQuantity(), fill.getOrderId()));
+        log.info("Tracking new trade: orderId={} instrument={} entryPrice={} breakeven={} cost={}",
+                fill.getOrderId(), fill.getInstrumentKey(), fill.getAveragePrice(), breakeven, cost);
+        notifier.send(String.format(
+                "%s: now tracking (entry=%.2f, qty=%d, orderId=%s)%nbreakeven %.2f — %s costs %.2f on %.2f invested (%.3f%%)",
+                fill.getInstrumentKey(), fill.getAveragePrice(), fill.getFilledQuantity(), fill.getOrderId(),
+                breakeven, cost.isEstimated() ? "estimated" : "broker-quoted",
+                cost.getTotalCharges(), cost.getInvestedAmount(), cost.getFractionOfInvested() * 100));
 
         feedFactory.apply(fill).start((price, timestamp) -> onPrice(trade, price));
     }
@@ -122,9 +146,19 @@ public class TradeMonitor implements TelegramCommandListener {
             return;
         }
 
+        // Breakeven is its own event rather than a ladder rung: it is 0%
+        // net profit by definition, and the ladder only carries positive
+        // thresholds. It is the first thing worth telling the user --
+        // from here on, anything gained is theirs.
+        if (!trade.breakevenReported && currentPrice >= trade.context.getBasePrice()) {
+            trade.breakevenReported = true;
+            notifier.send(String.format("%s: breakeven — costs of %.2f covered at %.2f",
+                    trade.fill.getInstrumentKey(), trade.cost.getTotalCharges(), currentPrice));
+        }
+
         OptionalDouble crossed = trade.tracker.checkAndAdvance(currentPrice);
         if (crossed.isPresent()) {
-            notifier.send(formatMilestoneMessage(trade.fill, currentPrice, crossed.getAsDouble()));
+            notifier.send(formatMilestoneMessage(trade.fill, currentPrice, crossed.getAsDouble(), trade));
         }
     }
 
@@ -245,10 +279,23 @@ public class TradeMonitor implements TelegramCommandListener {
                 trade.fill.getInstrumentKey(), exitPrice, trade.fill.getOrderId()));
     }
 
-    static String formatMilestoneMessage(TradeFillEvent fill, double currentPrice, double thresholdPercent) {
+    /**
+     * Reports net profit -- percentage above the cost-inclusive breakeven,
+     * and the rupees that would actually be kept on exiting here. The
+     * rupee figure is what makes it unambiguous; a percentage alone still
+     * invites reading it as gross.
+     */
+    static String formatMilestoneMessage(TradeFillEvent fill, double currentPrice, double thresholdPercent,
+                                         ActiveTrade trade) {
+        double netProfit = (currentPrice - trade.context.getBasePrice()) * fill.getFilledQuantity();
         return String.format(
-                "%s up %.1f%% from entry (entry=%.2f, current=%.2f)",
-                fill.getInstrumentKey(), thresholdPercent, fill.getAveragePrice(), currentPrice);
+                "%s up %s%% net (entry=%.2f, breakeven=%.2f, current=%.2f) — %.0f after costs",
+                fill.getInstrumentKey(), trimPercent(thresholdPercent),
+                fill.getAveragePrice(), trade.context.getBasePrice(), currentPrice, netProfit);
+    }
+
+    private static String trimPercent(double percent) {
+        return percent == Math.rint(percent) ? String.valueOf((long) percent) : String.valueOf(percent);
     }
 
     private static final class ActiveTrade {
@@ -256,13 +303,17 @@ public class TradeMonitor implements TelegramCommandListener {
         final TradeContext context;
         final ExitEngine engine;
         final ProfitMilestoneTracker tracker;
+        final TradeCost cost;
         volatile double lastPrice;
+        volatile boolean breakevenReported;
 
-        ActiveTrade(TradeFillEvent fill, TradeContext context, ExitEngine engine, ProfitMilestoneTracker tracker) {
+        ActiveTrade(TradeFillEvent fill, TradeContext context, ExitEngine engine,
+                    ProfitMilestoneTracker tracker, TradeCost cost) {
             this.fill = fill;
             this.context = context;
             this.engine = engine;
             this.tracker = tracker;
+            this.cost = cost;
             this.lastPrice = fill.getAveragePrice();
         }
     }

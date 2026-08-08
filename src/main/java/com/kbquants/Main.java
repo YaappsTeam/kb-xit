@@ -7,7 +7,11 @@ import com.kbquants.instrument.PositionSizer;
 import com.kbquants.live.TradeMonitor;
 import com.kbquants.live.UpstoxDataCredentials;
 import com.kbquants.live.UpstoxMarketDataFeed;
+import com.kbquants.domain.MilestoneLadder;
+import com.kbquants.live.UpstoxChargesService;
 import com.kbquants.live.UpstoxQuoteService;
+import com.kbquants.session.ChargesService;
+import com.kbquants.session.EstimatedChargesService;
 import com.kbquants.notification.TelegramCommandHandler;
 import com.kbquants.notification.TelegramCredentials;
 import com.kbquants.notification.TelegramNotifier;
@@ -74,18 +78,21 @@ public class Main {
         // at startup rather than on the first /buy, mid-trading-session.
         Function<TradeFillEvent, MarketDataFeed> feedFactory;
         BuyRequestResolver buyRequestResolver;
+        ChargesService chargesService;
 
         if (liveData) {
             UpstoxDataCredentials dataCredentials = UpstoxDataCredentials.fromEnv();
             feedFactory = liveFeedFactory(dataCredentials);
             buyRequestResolver = instrumentAwareResolver(dataCredentials);
+            chargesService = new UpstoxChargesService(dataCredentials);
         } else {
             feedFactory = Main::simulatedFeed;
             buyRequestResolver = new LiteralBuyRequestResolver();
+            chargesService = new EstimatedChargesService();
         }
 
-        TradeMonitor tradeMonitor = new TradeMonitor(
-                new NoOpOrderFillFeed(), feedFactory, notifier, buyRequestResolver);
+        TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
+                buyRequestResolver, MilestoneLadder.defaultLadder(), chargesService);
 
         TelegramCommandHandler commandHandler = new TelegramCommandHandler(credentials, tradeMonitor);
         commandHandler.start();

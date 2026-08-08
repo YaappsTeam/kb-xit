@@ -90,13 +90,56 @@ class TradeMonitorTest {
 
         new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
 
+        // 10 @ 100 = Rs 1,000 invested. Flat brokerage dominates at that
+        // size, so estimated round-trip costs are 4.23% and breakeven is
+        // 104.23 -- a small position is expensive in percentage terms.
         orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
         notifier.messages.clear();
 
-        feed.capturedListener.onPrice(100.5, 1L); // +0.5%
+        feed.capturedListener.onPrice(105.28, 1L); // +1% net of costs
 
-        assertEquals(1, notifier.messages.size());
-        assertTrue(notifier.messages.get(0).contains("0.5%"));
+        assertTrue(notifier.messages.stream().anyMatch(m -> m.contains("1% net")),
+                () -> "no net milestone in " + notifier.messages);
+    }
+
+    /**
+     * The case this whole cost model exists for: a gross gain that is
+     * actually a loss must not be reported as profit.
+     */
+    @Test
+    void shouldNotReportMilestoneOnAGrossGainThatIsANetLoss() {
+
+        RecordingNotifier notifier = new RecordingNotifier();
+        FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
+        FakeFeed feed = new FakeFeed();
+
+        new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
+
+        orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
+        notifier.messages.clear();
+
+        feed.capturedListener.onPrice(100.5, 1L); // +0.5% gross, but costs are 4.23%
+
+        assertTrue(notifier.messages.isEmpty(), () -> "expected silence, got " + notifier.messages);
+    }
+
+    @Test
+    void shouldAnnounceBreakevenOnceCostsAreCovered() {
+
+        RecordingNotifier notifier = new RecordingNotifier();
+        FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
+        FakeFeed feed = new FakeFeed();
+
+        new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
+
+        orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
+        notifier.messages.clear();
+
+        feed.capturedListener.onPrice(104.23, 1L);
+        feed.capturedListener.onPrice(104.30, 1L); // must not repeat
+
+        assertEquals(1, notifier.messages.stream().filter(m -> m.contains("breakeven")).count(),
+                () -> notifier.messages.toString());
     }
 
     @Test

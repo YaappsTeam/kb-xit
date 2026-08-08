@@ -77,7 +77,7 @@ Now message your bot on Telegram:
 /buy NSE_EQ|INE848E01016 1500 10
 ```
 
-A simulated price feed starts at ₹1500 and random-walks from there. As it crosses profit milestones (0.5%, 1%, 2%, 3%, 5%, 8%, 13%, 21%, 34%, 55%) you'll get a notification for each; if it drops to the stop-loss, the trade auto-closes and you're notified. Send `/status` anytime to see open trades, or `/exit <orderId>` / `/exit all` to close manually.
+A simulated price feed starts at ₹1500 and random-walks from there. You will first be told when the trade clears breakeven (brokerage and taxes covered), then as it crosses each net profit milestone (1%, 2%, 3%, 5%, 8%, 13%, 21%, 34%, 55%); if it drops to the stop-loss, the trade auto-closes and you're notified. Send `/status` anytime to see open trades, or `/exit <orderId>` / `/exit all` to close manually.
 
 Stop the process with `Ctrl+C` — it shuts down the Telegram poller cleanly.
 
@@ -162,25 +162,50 @@ The trade-off: between refreshes, contracts listed since Wednesday won't resolve
 
 That forces a download regardless of schedule and takes effect on the next command. If it fails, the previous master stays loaded — stale beats none mid-session.
 
+## Costs and breakeven
+
+The primary goal is capital preservation, so **every percentage is net of costs**. A trade's breakeven is not its entry price — it's the price at which brokerage, STT, exchange transaction charges, GST and stamp duty are all covered.
+
+Costs come from Upstox's own brokerage calculator (reachable with the Analytics Token, no static IP), one call per side at `/buy`. Real quotes:
+
+| Position | Invested | Round trip | % of invested |
+|---|---|---|---|
+| NIFTY 25000 CE, 13 lots | ₹46,728 | ₹157.87 | 0.338% |
+| NIFTY 25000 CE, **1 lot** | ₹3,594 | ₹55.72 | **1.550%** |
+| ACC equity, 36 sh | ₹49,061 | ₹64.62 | 0.132% |
+
+**The cost percentage is not a constant** — it swings 12× with position size, because ₹20 brokerage per order is flat while everything else is proportional. That's why it's computed per trade rather than assumed.
+
+It also matters more than it looks. On that 1-lot position, a *gross* gain of 1% is a **net loss**: costs are 1.55%. Measuring from entry, the bot would have announced a profit on a losing trade. Measuring from breakeven, it stays quiet until you're genuinely ahead.
+
+Concretely, `basePrice` becomes the cost-inclusive breakeven, and everything measures from it — phase transitions, milestone notifications, and ownership locks. So PHASE_2 ("base capital protection") now means your capital is genuinely safe, and "lock 30% of open profit" locks 30% of money you'd actually keep.
+
+Two things to expect:
+
+- **These figures read lower than Upstox's own P&L screen**, which shows gross. Same position, two numbers; ours is the one you take home.
+- **Breakeven is an estimate**, because sell-side charges depend on the exit price, which isn't known at entry. Computing them at the entry price understates by around ₹0.24 on a ₹46.7k position — 0.0005% of capital.
+
+If the charges call fails, a built-in model takes over and the trade is marked `estimated`. It's calibrated against real quotes and separates derivatives from equity (options genuinely cost several times what intraday equity does): within ₹0.09 of the broker on the ACC position above.
+
 ## Milestone sets
 
-An option premium moves roughly an order of magnitude further than its underlying, so one milestone ladder cannot serve both. Send `/ladder` and the bot replies with the available sets as tappable buttons; the active one is marked.
+An option premium moves much further than an equity price, so one ladder cannot serve both. Send `/ladder` and the bot replies with the available sets as tappable buttons; the active one is marked.
 
 | | EQUITY | OPTIONS |
 |---|---|---|
-| Rungs | 0.5, 1, 2, 3, 5, 8, 13, 21, 34, 55% | 1.3, 5, 8, 13, 21, 34, 55, 89, 144, 233% |
-| PHASE_2 (breakeven) | 5% | 21% |
-| PHASE_3 | 13% | 55% |
-| Ownership locks | 13/21/34/55 → 30/50/70/85% | 55/89/144/233 → 30/50/70/85% |
+| Rungs (net of costs) | 1, 2, 3, 5, 8, 13, 21, 34, 55% | 1, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233% |
+| PHASE_2 (capital safe) | 2% | 8% |
+| PHASE_3 + locking starts | 5% | 21% |
+| Ownership locks | 5/8/13/21/34/55 → 30/50/65/75/85/90% | 21/34/55/89/144/233 → 30/50/65/75/85/90% |
 | Hard stop | 20% | 40% |
 
-The **hard stop moves with the set**, which is the point: 20% below entry is a disaster stop on an equity and a routine wiggle on an option premium — left at 20%, nearly every option trade would stop out on noise.
+Both ladders open at **1% net** — your minimum worthwhile target, after costs. Before that, the only event is the breakeven notification.
 
-Above 5% the option rungs are the same Fibonacci sequence as the equity ladder shifted up four places. For a weekly NIFTY ATM option (delta ~0.5) they correspond to underlying moves of roughly 0.34% at PHASE_2 and 0.90% at PHASE_3.
+The **hard stop moves with the set**: 20% below entry is a disaster stop on an equity and a routine wiggle on an option premium, so left at 20% nearly every option trade would stop out on noise.
 
-The **1.3% opening rung** sits below that sequence as an early "this is working" ping — on an ATM premium it's about a 0.02% move in the underlying, which is inside the noise. It carries no phase transition and no ownership lock, so it only ever notifies; nothing about your stop-loss changes when it fires.
+PHASE_2 sits higher for options (8% vs 2%) for the same reason — it ratchets the stop to breakeven, and placing that too early flat-stops trades that were about to work. The first ownership lock always coincides exactly with PHASE_3; a gap between them would be a dead zone where you're in PHASE_3 with the stop parked at breakeven.
 
-**These are reasoned starting points, not values derived from data.** They assume ATM and a multi-day expiry; further out of the money the same rungs trigger on about half the underlying move, and on expiry day gamma fires the early ones within minutes. Run paper mode on live data and move the rungs to match what you actually see.
+**These are reasoned starting points, not values derived from data.** Run paper mode on live data and move the rungs to match what you actually see.
 
 Selection rules:
 
@@ -220,7 +245,7 @@ Selection rules:
 ## Running tests
 
 ```bash
-mvn test              # full suite (202 tests)
+mvn test              # full suite (214 tests)
 mvn test -Dtest=PhaseManagerTest   # a single test class
 ```
 

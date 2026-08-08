@@ -43,46 +43,47 @@ class MilestoneOwnershipStrategyTest {
         context.setCurrentPhase(Phase.PHASE_3);
     }
 
+    // base = 101 (cost-inclusive breakeven), and both the milestone
+    // thresholds and the open profit are measured from it.
+
     /**
-     * Should not apply ownership below first milestone (+13%).
+     * Should not apply ownership below the first lock rung (+5% of base).
      */
     @Test
     void shouldNotApplyOwnershipBelowFirstMilestone() {
 
-        strategy.apply(112.0, context); // +12%
+        strategy.apply(105.0, context); // (105-101)/101 = 3.96%, below 5%
 
         assertEquals(0.0, context.getCurrentStopLoss());
     }
 
     /**
-     * Should apply 30% ownership at +13% milestone.
+     * Should apply 30% ownership at the +5% rung.
      */
     @Test
     void shouldApplyFirstMilestoneOwnership() {
 
-        strategy.apply(113.0, context);
+        strategy.apply(106.10, context); // +5.05% of base, clears the +5% rung
 
-        // base = 101
-        // open profit = 12
-        // 30% = 3.6
-        // SL = 104.6
+        // open profit = 106.10 - 101 = 5.10
+        // 30% = 1.53
+        // SL = 102.53
 
-        assertEquals(104.6, context.getCurrentStopLoss(), 0.0001);
+        assertEquals(102.53, context.getCurrentStopLoss(), 0.0001);
     }
 
     /**
-     * Should apply correct milestone when price crosses +21%.
+     * Should apply the higher lock once the +8% rung is crossed.
      */
     @Test
     void shouldApplySecondMilestoneOwnership() {
 
-        strategy.apply(121.0, context); // +21%
+        strategy.apply(109.15, context); // +8.07% of base
 
-        // open profit = 20
-        // 50% = 10
-        // SL = 111
+        // open profit = 8.15, 50% = 4.075
+        // SL = 105.075
 
-        assertEquals(111.0, context.getCurrentStopLoss(), 0.0001);
+        assertEquals(105.075, context.getCurrentStopLoss(), 0.0001);
     }
 
     /**
