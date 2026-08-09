@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -35,6 +36,20 @@ public class TelegramCommandHandler {
     /** Prefix on inline-keyboard callback tokens for milestone-set choices. */
     public static final String LADDER_CALLBACK_PREFIX = "ladder:";
 
+    /** Prefixes for per-trade buttons. The suffix is an orderId, or "all". */
+    public static final String EXIT_CALLBACK_PREFIX = "exit:";
+    public static final String RELEASE_CALLBACK_PREFIX = "release:";
+    public static final String OBSERVE_CALLBACK_PREFIX = "observe:";
+    public static final String MANAGE_CALLBACK_PREFIX = "manage:";
+
+    /**
+     * Telegram rejects callback_data beyond 64 bytes. Generated orderIds
+     * ("telegram-" plus a UUID) leave comfortable room, but a broker id
+     * could be longer, so buttons are skipped rather than silently
+     * truncated -- a truncated token would target the wrong trade.
+     */
+    static final int MAX_CALLBACK_BYTES = 64;
+
     /**
      * Lives next to the dispatch switch below so the two are updated
      * together -- help that has drifted from what the bot actually accepts
@@ -53,12 +68,13 @@ public class TelegramCommandHandler {
             "Symbols ignore case and spaces, e.g. nifty25000ce18aug26",
             "",
             "CLOSE A POSITION",
-            "/exit <orderId>|all — sell now, one trade or everything open",
+            "/exit [orderId|all] — sell now; bare shows a button per open trade",
             "",
             "STEP BACK WITHOUT SELLING",
-            "/observe <orderId>|all — keep the alerts, no automatic exit",
-            "/release <orderId>|all — stop watching entirely; position stays open",
-            "/manage <orderId>|all — hand it back to the engine",
+            "/observe [orderId|all] — keep the alerts, no automatic exit",
+            "/release [orderId|all] — stop watching entirely; position stays open",
+            "/manage [orderId|all] — hand it back to the engine",
+            "Each of these shows buttons when sent without a target.",
             "/pause, /resume — stop or resume taking on new trades",
             "",
             "SETTINGS",
@@ -275,11 +291,29 @@ public class TelegramCommandHandler {
      */
     private static void dispatchMode(String[] parts, String rawText, MonitorMode mode,
                                      TelegramCommandListener listener) {
+        if (parts.length == 1) {
+            listener.onMonitorModeChoicesRequested(mode);
+            return;
+        }
         if (parts.length != 2) {
             reportMalformed(parts[0], parts[0] + " <orderId> or " + parts[0] + " all", rawText, listener);
             return;
         }
         listener.onMonitorModeRequested(parts[1], mode);
+    }
+
+    /** The callback prefix a monitoring mode's buttons carry. */
+    public static String callbackPrefixFor(MonitorMode mode) {
+        return switch (mode) {
+            case RELEASED -> RELEASE_CALLBACK_PREFIX;
+            case OBSERVED -> OBSERVE_CALLBACK_PREFIX;
+            case MANAGED -> MANAGE_CALLBACK_PREFIX;
+        };
+    }
+
+    /** Whether a token fits Telegram's callback_data limit. */
+    public static boolean fitsCallbackData(String token) {
+        return token.getBytes(StandardCharsets.UTF_8).length <= MAX_CALLBACK_BYTES;
     }
 
     /**
@@ -324,20 +358,36 @@ public class TelegramCommandHandler {
         }
         if (data.startsWith(LADDER_CALLBACK_PREFIX)) {
             listener.onLadderSelected(data.substring(LADDER_CALLBACK_PREFIX.length()));
+        } else if (data.startsWith(EXIT_CALLBACK_PREFIX)) {
+            dispatchExitTarget(data.substring(EXIT_CALLBACK_PREFIX.length()), listener);
+        } else if (data.startsWith(RELEASE_CALLBACK_PREFIX)) {
+            listener.onMonitorModeRequested(data.substring(RELEASE_CALLBACK_PREFIX.length()), MonitorMode.RELEASED);
+        } else if (data.startsWith(OBSERVE_CALLBACK_PREFIX)) {
+            listener.onMonitorModeRequested(data.substring(OBSERVE_CALLBACK_PREFIX.length()), MonitorMode.OBSERVED);
+        } else if (data.startsWith(MANAGE_CALLBACK_PREFIX)) {
+            listener.onMonitorModeRequested(data.substring(MANAGE_CALLBACK_PREFIX.length()), MonitorMode.MANAGED);
         } else {
             log.debug("Ignoring unrecognized callback data: {}", data);
         }
     }
 
     private static void dispatchExit(String[] parts, String rawText, TelegramCommandListener listener) {
+        if (parts.length == 1) {
+            listener.onExitChoicesRequested();
+            return;
+        }
         if (parts.length != 2) {
             reportMalformed("/exit", "/exit <orderId> or /exit all", rawText, listener);
             return;
         }
-        if (parts[1].equalsIgnoreCase("all")) {
+        dispatchExitTarget(parts[1], listener);
+    }
+
+    private static void dispatchExitTarget(String target, TelegramCommandListener listener) {
+        if (target.equalsIgnoreCase("all")) {
             listener.onExitAll();
         } else {
-            listener.onExit(parts[1]);
+            listener.onExit(target);
         }
     }
 

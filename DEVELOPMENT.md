@@ -216,7 +216,7 @@ Unchanged from the previous milestone.
 ## 10. Test suite summary
 
 ```
-243 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+277 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |

@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -86,6 +87,16 @@ class TelegramCommandHandlerTest {
         @Override
         public void onRiskSet(double maxRiskPerTrade) {
             events.add("riskSet:" + maxRiskPerTrade);
+        }
+
+        @Override
+        public void onExitChoicesRequested() {
+            events.add("exitChoices");
+        }
+
+        @Override
+        public void onMonitorModeChoicesRequested(com.kbquants.domain.MonitorMode mode) {
+            events.add("modeChoices:" + mode);
         }
     }
 
@@ -175,14 +186,18 @@ class TelegramCommandHandlerTest {
         assertEquals(List.of("exitAll"), listener.events);
     }
 
+    /**
+     * Bare /exit offers buttons rather than erroring: orderIds are UUIDs,
+     * and retyping one while a position moves is the friction this removes.
+     */
     @Test
-    void shouldReportMalformedExitCommand() {
+    void bareExitShouldOfferButtons() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/exit", listener);
 
-        assertEquals(List.of("malformed:/exit:/exit <orderId> or /exit all"), listener.events);
+        assertEquals(List.of("exitChoices"), listener.events);
     }
 
     @Test
@@ -273,13 +288,42 @@ class TelegramCommandHandlerTest {
     }
 
     @Test
-    void shouldReportMonitorModeCommandWithoutATarget() {
+    void bareModeCommandsShouldOfferButtons() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/release", listener);
+        TelegramCommandHandler.dispatch("/observe", listener);
+        TelegramCommandHandler.dispatch("/manage", listener);
 
-        assertEquals(List.of("malformed:/release:/release <orderId> or /release all"), listener.events);
+        assertEquals(List.of("modeChoices:RELEASED", "modeChoices:OBSERVED", "modeChoices:MANAGED"),
+                listener.events);
+    }
+
+    @Test
+    void tappedTradeButtonsShouldDispatchTheRightAction() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatchCallback("exit:order-1", listener);
+        TelegramCommandHandler.dispatchCallback("exit:all", listener);
+        TelegramCommandHandler.dispatchCallback("release:order-1", listener);
+        TelegramCommandHandler.dispatchCallback("observe:order-2", listener);
+        TelegramCommandHandler.dispatchCallback("manage:all", listener);
+
+        assertEquals(List.of("exit:order-1", "exitAll", "mode:RELEASED:order-1",
+                "mode:OBSERVED:order-2", "mode:MANAGED:all"), listener.events);
+    }
+
+    /**
+     * Telegram rejects callback_data over 64 bytes, and a truncated token
+     * would act on the wrong trade.
+     */
+    @Test
+    void shouldRecogniseWhenATokenIsTooLongForCallbackData() {
+
+        assertTrue(TelegramCommandHandler.fitsCallbackData("exit:telegram-" + java.util.UUID.randomUUID()));
+        assertFalse(TelegramCommandHandler.fitsCallbackData("exit:" + "x".repeat(70)));
     }
 
     /**
@@ -289,12 +333,10 @@ class TelegramCommandHandlerTest {
     @Test
     void everyArgumentTakingCommandShouldAnswerWhenBare() {
 
-        for (String command : List.of("/track", "/exit", "/release", "/observe", "/manage")) {
+        for (String command : List.of("/track", "/exit", "/release", "/observe", "/manage", "/risk")) {
             RecordingListener listener = new RecordingListener();
             TelegramCommandHandler.dispatch(command, listener);
             assertEquals(1, listener.events.size(), () -> command + " stayed silent");
-            assertTrue(listener.events.get(0).startsWith("malformed:" + command),
-                    () -> command + " gave " + listener.events.get(0));
         }
     }
 

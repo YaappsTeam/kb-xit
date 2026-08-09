@@ -114,6 +114,8 @@ You should see `... started in PAPER trading mode with LIVE Upstox market data`.
 
 Ticks only arrive while the market is open, so outside market hours the engine sits idle rather than reporting an error.
 
+**If the price feed drops, you are told.** Without prices the stop-loss stops being enforced, and nothing else would make that visible — the bot looks healthy while the position is unprotected. The alert names the stop that is no longer being applied; reconnection is automatic and recovery is announced too. Each feed is closed when its trade closes or is released, so a session's trades don't leave a connection open apiece.
+
 ## Symbols, prices and lot sizing (live mode)
 
 Typing `NSE_FO|45148` while scalping is not realistic, so in live mode `/track` takes a **trading symbol** and fills in the rest:
@@ -260,6 +262,8 @@ Selection rules:
 
 This app **never places a buy order**. It's purely an exit engine: every position it manages was bought elsewhere and handed to it by `/track`. So it has to be possible to hand one back.
 
+Sent **without a target**, `/exit`, `/release`, `/observe` and `/manage` reply with a button per open trade — labelled with symbol, entry, current price and mode — so you never retype a generated orderId while a position is moving. Tap one, or use the explicit form when you already know the id.
+
 `/exit` sells. These don't:
 
 | Mode | Notifications | Stop tracked | Auto exit |
@@ -304,11 +308,12 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 | `/track <symbol>` | Start managing the exit of a position you already hold, at LTP, sized from `CAPITAL_PER_TRADE` (live mode) |
 | `/track <symbol> <qty>` | As above with an explicit quantity |
 | `/track <symbol> <price> <qty>` | Fully explicit; the only form available in simulated mode |
-| `/exit <orderId>` | Force-exit that trade |
-| `/exit all` | Force-exit every open trade |
+| `/exit` | Show a button per open trade, plus "sell all" |
+| `/exit <orderId>` / `/exit all` | Sell directly, skipping the buttons |
 | `/status` | Report all open trades: instrument, entry, current price, phase, stop-loss |
 | `/refresh` | Re-fetch the instrument master now, instead of waiting for Wednesday |
 | `/pause` / `/resume` | Stop / resume adopting new trades. Open trades stay managed |
+| `/release` / `/observe` / `/manage` | Show a button per open trade |
 | `/release <orderId>` / `all` | Hand a trade back: position stays open, engine stops acting |
 | `/observe <orderId>` / `all` | Keep the notifications, drop the automatic exit |
 | `/manage <orderId>` / `all` | Return a trade to full management |
