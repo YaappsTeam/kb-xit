@@ -150,12 +150,9 @@ class TradeMonitorPersistenceTest {
 
         fills.listener.onFill(new TradeFillEvent("order-1", "NSE_EQ|X", 100.0, 10, 0.05, "ACC"));
 
-        // Two ticks, because PhaseManager advances one phase per call: a
-        // price gapping through both thresholds takes two ticks to catch
-        // up. (That contradicts PRODUCT_REQUIREMENTS F4, which says all
-        // intermediate transitions apply in one tick -- a separate defect.)
+        // One tick is enough: a price gapping through both thresholds
+        // applies both transitions, per PRODUCT_REQUIREMENTS F4.
         feed.listener.onPrice(140.0, 1L);
-        feed.listener.onPrice(140.0, 2L);
 
         TradeSnapshot snapshot = store.saved.get(0);
         assertEquals(Phase.PHASE_3.name(), snapshot.getPhase());

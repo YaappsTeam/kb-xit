@@ -56,11 +56,11 @@ This is the heart of what's been built. It's a small, deterministic rules pipeli
 Everything below measures from **`basePrice`, the cost-inclusive breakeven**, not the entry price. That is the whole difference between reporting gross and net: on a small position round-trip costs can exceed 1.5% of capital, enough for a gross gain to be a real loss.
 
 1. **Hard safety stop** (`StopLossEngine.applyHardSafety`) — floor stop-loss at entry price − the active set's hard stop (20% EQUITY, 40% OPTIONS), every tick, regardless of phase.
-2. **Phase transition** (`PhaseManager.evaluatePhaseTransition`) — trigger percentages come from `MilestoneLadder`:
+2. **Phase transition** (`PhaseManager.evaluatePhaseTransition`) — trigger percentages come from `MilestoneLadder`, and **every** transition the price qualifies for is applied in the same tick, so a gap through both thresholds does not leave the trade a phase behind:
    - `PHASE_1 → PHASE_2` at basePrice × 1.02 (EQUITY) or × 1.08 (OPTIONS)
    - `PHASE_2 → PHASE_3` at basePrice × 1.05 (EQUITY) or × 1.21 (OPTIONS)
    - `PHASE_3`/`PHASE_4` currently have no further automatic transition logic.
-3. **Base protection** (`StopLossEngine.applyBaseProtectionIfEligible`) — once in `PHASE_2`, ratchets the stop-loss up to `basePrice`, so reaching PHASE_2 genuinely means capital is safe rather than losing exactly the costs.
+3. **Base protection** (`StopLossEngine.applyBaseProtectionIfEligible`) — from `PHASE_2` **onward**, ratchets the stop-loss up to `basePrice`, so reaching PHASE_2 genuinely means capital is safe rather than losing exactly the costs.
 4. **Ownership strategy** (`OwnershipStrategy.apply`, only active in `PHASE_3`) — locks a portion of **net** open profit as the new stop-loss, via one of two pluggable strategies (factory-selected by `OwnershipStrategyFactory`):
    - **`ContinuousOwnershipStrategy`** — locks a flat **30%** of open profit continuously once in Phase 3 (intentionally not milestone-based).
    - **`MilestoneOwnershipStrategy`** — locks an increasing share at milestones read from `MilestoneLadder.ownershipLockMap()`. The first lock always coincides with the PHASE_3 rung; a gap between them would be a dead zone where the stop sits at breakeven while profit runs:
@@ -216,7 +216,7 @@ Unchanged from the previous milestone.
 ## 10. Test suite summary
 
 ```
-288 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+294 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |

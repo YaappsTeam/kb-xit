@@ -59,6 +59,43 @@ class PhaseManagerTest {
     }
 
     /**
+     * A price that clears both thresholds applies both transitions in the
+     * same tick, per PRODUCT_REQUIREMENTS F4.
+     * <p>
+     * Advancing one phase per tick left the trade in PHASE_2 until another
+     * tick arrived, and since ownership locking is PHASE_3-only, the lock
+     * was missed for exactly the tick where a violent move made it most
+     * valuable.
+     */
+    @Test
+    void shouldApplyEveryTransitionAPriceQualifiesForInOneTick() {
+
+        // base = 101, so PHASE_2 needs 103.02 and PHASE_3 needs 106.05.
+        phaseManager.evaluatePhaseTransition(140.0, context);
+
+        assertEquals(Phase.PHASE_3, context.getCurrentPhase());
+    }
+
+    @Test
+    void shouldStopAtTheHighestPhaseTheGapReaches() {
+
+        // Clears PHASE_2 (103.02) but not PHASE_3 (106.05).
+        phaseManager.evaluatePhaseTransition(105.0, context);
+
+        assertEquals(Phase.PHASE_2, context.getCurrentPhase());
+    }
+
+    @Test
+    void repeatedEvaluationAtTheSamePriceShouldBeStable() {
+
+        phaseManager.evaluatePhaseTransition(140.0, context);
+        phaseManager.evaluatePhaseTransition(140.0, context);
+        phaseManager.evaluatePhaseTransition(140.0, context);
+
+        assertEquals(Phase.PHASE_3, context.getCurrentPhase());
+    }
+
+    /**
      * Thresholds measure from basePrice, not entryPrice. With costs heavy
      * enough to push breakeven to 110, a price of 105 is still a net loss
      * and must not advance the phase -- under entry-anchored thresholds it

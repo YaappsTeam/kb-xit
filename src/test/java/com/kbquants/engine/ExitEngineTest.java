@@ -105,4 +105,47 @@ class ExitEngineTest {
 
         assertEquals(110.0, context.getCurrentStopLoss(), 0.0001);
     }
+
+    /**
+     * The behaviour the phase fix exists for: a price gapping through both
+     * thresholds must lock profit on that same tick.
+     * <p>
+     * Advancing one phase per tick left the trade in PHASE_2, and since
+     * ownership locking is PHASE_3-only, the stop stayed at breakeven for
+     * exactly the tick where a violent move made the lock most valuable.
+     */
+    @Test
+    void shouldLockProfitOnTheSameTickAsAGapThroughBothPhases() {
+
+        TradeContext context = new TradeContext(
+                "T1", 100.0, 101.0, 1,
+                ExitModel.MODERATE, OwnershipMode.MILESTONE);
+
+        ExitEngine engine = new ExitEngine(context);
+
+        // One tick, straight from entry to +38% net of base.
+        engine.onPriceUpdate(140.0, context);
+
+        assertEquals(Phase.PHASE_3, context.getCurrentPhase());
+        assertTrue(context.getCurrentStopLoss() > context.getBasePrice(),
+                "profit should be locked above breakeven on the gap tick, was "
+                        + context.getCurrentStopLoss());
+    }
+
+    /**
+     * And a gap that only clears the first threshold still floors the stop
+     * at breakeven rather than leaving it at the hard stop.
+     */
+    @Test
+    void shouldProtectBreakevenOnAGapThatOnlyReachesPhase2() {
+
+        TradeContext context = new TradeContext(
+                "T1", 100.0, 101.0, 1,
+                ExitModel.MODERATE, OwnershipMode.MILESTONE);
+
+        new ExitEngine(context).onPriceUpdate(105.0, context);
+
+        assertEquals(Phase.PHASE_2, context.getCurrentPhase());
+        assertEquals(101.0, context.getCurrentStopLoss(), 0.0001);
+    }
 }

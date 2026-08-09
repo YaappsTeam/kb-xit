@@ -121,4 +121,22 @@ class StopLossEngineTest {
         // Since 80 < 95, SL must remain 95
         assertEquals(95.0, context.getCurrentStopLoss());
     }
+
+    /**
+     * Breakeven protection is a floor from PHASE_2 onward, not in PHASE_2
+     * alone. Gated on PHASE_2 exactly, a price gapping straight to PHASE_3
+     * skipped it -- leaving the stop at the hard stop when it should have
+     * been at breakeven.
+     */
+    @Test
+    void baseProtectionShouldStillApplyOnceBeyondPhase2() {
+
+        TradeContext context = new TradeContext(
+                "T1", 100.0, 101.0, 1, ExitModel.MODERATE, OwnershipMode.MILESTONE);
+        context.setCurrentPhase(Phase.PHASE_3);
+
+        new StopLossEngine().applyBaseProtectionIfEligible(context);
+
+        assertEquals(101.0, context.getCurrentStopLoss(), 0.0001);
+    }
 }
