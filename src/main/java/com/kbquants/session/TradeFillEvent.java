@@ -22,15 +22,28 @@ public final class TradeFillEvent {
      */
     private final double tickSize;
 
+    /**
+     * The trading symbol, for showing the trade to a human. Falls back to
+     * the instrument key when unknown -- readable on a Telegram button in a
+     * way that "NSE_FO|45148" is not.
+     */
+    private final String displaySymbol;
+
     public TradeFillEvent(String orderId, String instrumentKey, double averagePrice, int filledQuantity) {
-        this(orderId, instrumentKey, averagePrice, filledQuantity, 0);
+        this(orderId, instrumentKey, averagePrice, filledQuantity, 0, null);
     }
 
     public TradeFillEvent(String orderId, String instrumentKey, double averagePrice, int filledQuantity, double tickSize) {
+        this(orderId, instrumentKey, averagePrice, filledQuantity, tickSize, null);
+    }
+
+    public TradeFillEvent(String orderId, String instrumentKey, double averagePrice, int filledQuantity,
+                          double tickSize, String displaySymbol) {
         this.orderId = Objects.requireNonNull(orderId, "orderId must not be null");
         this.instrumentKey = Objects.requireNonNull(instrumentKey, "instrumentKey must not be null");
         this.averagePrice = averagePrice;
         this.filledQuantity = filledQuantity;
         this.tickSize = tickSize;
+        this.displaySymbol = displaySymbol == null || displaySymbol.isBlank() ? instrumentKey : displaySymbol;
     }
 }

@@ -240,7 +240,8 @@ public class TradeMonitor implements TelegramCommandListener {
         }
 
         onFill(new TradeFillEvent("telegram-" + UUID.randomUUID(),
-                request.getInstrumentKey(), request.getPrice(), request.getQuantity(), request.getTickSize()));
+                request.getInstrumentKey(), request.getPrice(), request.getQuantity(), request.getTickSize(),
+                request.getDisplaySymbol()));
     }
 
     @Override
@@ -280,6 +281,73 @@ public class TradeMonitor implements TelegramCommandListener {
     @Override
     public void onMalformedCommand(String command, String usage) {
         notifier.send(command + " needs arguments — usage: " + usage);
+    }
+
+    @Override
+    public void onExitChoicesRequested() {
+        offerTradeButtons("Sell which trade?", TelegramCommandHandler.EXIT_CALLBACK_PREFIX, "Sell all open");
+    }
+
+    @Override
+    public void onMonitorModeChoicesRequested(MonitorMode mode) {
+
+        String prompt = switch (mode) {
+            case RELEASED -> "Release which trade? The position stays open — only the monitoring stops.";
+            case OBSERVED -> "Observe which trade? Alerts continue, automatic exits stop.";
+            case MANAGED -> "Manage which trade? Automatic exits resume.";
+        };
+
+        offerTradeButtons(prompt, TelegramCommandHandler.callbackPrefixFor(mode),
+                "Apply to all open trades");
+    }
+
+    /**
+     * One button per open trade, labelled with enough to choose without
+     * checking /status first: symbol, entry, current price and mode.
+     * <p>
+     * Trades whose orderId would overflow Telegram's callback_data limit
+     * are listed as text instead of being offered as a button -- a
+     * truncated token would act on the wrong trade.
+     */
+    private void offerTradeButtons(String prompt, String prefix, String allLabel) {
+
+        List<ActiveTrade> open = openTrades().toList();
+        if (open.isEmpty()) {
+            notifier.send("No open trades");
+            return;
+        }
+
+        LinkedHashMap<String, String> choices = new LinkedHashMap<>();
+        StringBuilder untargetable = new StringBuilder();
+
+        for (ActiveTrade trade : open) {
+            String token = prefix + trade.fill.getOrderId();
+            if (!TelegramCommandHandler.fitsCallbackData(token)) {
+                untargetable.append(System.lineSeparator()).append("  ").append(trade.fill.getOrderId());
+                continue;
+            }
+            choices.put(describeForButton(trade), token);
+        }
+
+        if (open.size() > 1) {
+            choices.put(allLabel, prefix + "all");
+        }
+
+        if (choices.isEmpty()) {
+            notifier.send(prompt + " — no trade has an id short enough for a button; use the command with an orderId:"
+                    + untargetable);
+            return;
+        }
+
+        notifier.sendChoices(untargetable.length() == 0
+                ? prompt
+                : prompt + System.lineSeparator() + "(too long for a button, type the id instead:" + untargetable + ")",
+                choices);
+    }
+
+    private static String describeForButton(ActiveTrade trade) {
+        return String.format("%s  %.2f → %.2f  [%s]",
+                trade.fill.getDisplaySymbol(), trade.fill.getAveragePrice(), trade.lastPrice, trade.mode);
     }
 
     @Override

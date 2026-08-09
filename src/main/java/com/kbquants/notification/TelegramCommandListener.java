@@ -70,4 +70,14 @@ public interface TelegramCommandListener {
      * trades opened afterwards. Zero removes the ceiling.
      */
     void onRiskSet(double maxRiskPerTrade);
+
+    /**
+     * Offer the open trades as buttons to close. Orders are identified by
+     * generated UUIDs, which nobody should have to retype while a position
+     * is moving.
+     */
+    void onExitChoicesRequested();
+
+    /** Offer the open trades as buttons for the given monitoring mode. */
+    void onMonitorModeChoicesRequested(com.kbquants.domain.MonitorMode mode);
 }
