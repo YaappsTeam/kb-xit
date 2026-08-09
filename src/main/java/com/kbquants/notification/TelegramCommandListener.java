@@ -98,4 +98,11 @@ public interface TelegramCommandListener {
 
     /** List positions detected at the broker but not managed. */
     void onPendingAdoptionsRequested();
+
+    /**
+     * Check what is being managed against what the broker actually holds.
+     * A position closed by hand leaves this system watching something that
+     * is not there.
+     */
+    void onReconcileRequested();
 }

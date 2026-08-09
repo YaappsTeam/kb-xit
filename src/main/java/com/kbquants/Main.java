@@ -15,6 +15,8 @@ import com.kbquants.domain.TradingToken;
 import com.kbquants.live.UpstoxChargesService;
 import com.kbquants.live.UpstoxExitOrderPlacer;
 import com.kbquants.live.UpstoxOrderFillFeed;
+import com.kbquants.live.UpstoxPositionQuery;
+import com.kbquants.session.PositionQuery;
 import com.kbquants.live.UpstoxQuoteService;
 import com.kbquants.session.ChargesService;
 import com.kbquants.session.EstimatedChargesService;
@@ -142,9 +144,14 @@ public class Main {
                     + "Nothing is managed until you accept it. Needs a /token before the stream can start.");
         }
 
+        // Only ever asked once a /token arrives; without one it reports
+        // itself unavailable rather than answering "nothing is open",
+        // which would flag every managed trade as gone.
+        PositionQuery positionQuery = new UpstoxPositionQuery(tradingToken);
+
         TradeMonitor tradeMonitor = new TradeMonitor(orderFillFeed, feedFactory, notifier,
                 trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore, exitOrderPlacer,
-                tradingToken, watchBrokerFills);
+                tradingToken, watchBrokerFills, positionQuery);
 
         EndOfDaySchedule endOfDay = endOfDaySchedule(tradeMonitor);
         if (endOfDay != null) {

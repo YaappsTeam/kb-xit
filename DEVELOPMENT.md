@@ -205,14 +205,14 @@ Unchanged from the previous milestone.
 - **Order slicing is not implemented** — quantity is capped at the exchange freeze limit (27 lots for NIFTY) rather than split across orders, because multiple fills at different prices do not fit the single-entry-price model.
 - **Instrument master is refreshed weekly, not daily** — contracts listed since the last Wednesday will not resolve until `/refresh`.
 - **Real exit orders are written but unproven.** `UpstoxExitOrderPlacer` places MARKET SELLs behind `PLACE_REAL_ORDERS`, claims an order id before sending so a lost response cannot be followed by a second sell, and reports 5xx/timeouts as *uncertain* rather than failed. It has never placed a real order: that is blocked on operational prerequisites, not code — a registered **static IP** (order placement is refused from anywhere else with UDAPI1221), API key/secret/redirect, and the **daily** access token, supplied via `/token` because it expires at 3:30 AM behind an interactive 2FA login.
-- **Position reconciliation against the broker** — open trades now survive a restart via `JsonTradeStore`, but nothing checks them against the broker's actual positions. A trade closed by hand while the process was down is resumed regardless; the user is warned to check. Real reconciliation needs the order/position APIs, so it is Phase 3.
+- **Reconciliation reads positions, not holdings.** `UpstoxPositionQuery` calls `short-term-positions`; a delivery position left open overnight moves to holdings and will be reported as gone. Harmless by design — a discrepancy stands the trade down to `OBSERVED` rather than dropping it — but it is a false positive a `ORDER_PRODUCT=D` user would see daily. Reading holdings too is the fix if that ever matters.
 - **The Upstox live feeds are untested against real network/servers** — see §5.1. Same for Telegram's `getUpdates`/`sendMessage` calls — see §6.
 - **Runner-level classes lack dedicated unit tests**: `SequentialCombinationExecutor`, `ParallelCombinationExecutor`, `SimulationRequest`, `SimulationResult`, and `SimulationRunner` — unchanged gap.
 
 ## 10. Test suite summary
 
 ```
-360 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+396 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |
@@ -223,6 +223,9 @@ Unchanged from the previous milestone.
 | `TradeMonitorControlTest` | 15 |
 | `MilestoneSetsTest` | 14 |
 | `UpstoxExitOrderPlacerTest` | 13 |
+| `TradeMonitorReconciliationTest` | 12 |
+| `UpstoxPositionQueryTest` | 12 |
+| `PositionReconciliationTest` | 12 |
 | `TradeMonitorFeedLifecycleTest` | 12 |
 | `TradeMonitorExitOrderTest` | 12 |
 | `TradeMonitorAdoptionTest` | 12 |
@@ -266,13 +269,13 @@ Run with: `mvn test`. Build a runnable jar with `mvn package`.
 
 ## 11. Suggested next steps (see IMPLEMENTATION_PLAN.md for the full phased roadmap)
 
-1. **Position reconciliation on startup** — the last Phase 3 item. Open trades survive a restart, but nothing checks them against the broker's actual positions, so one closed by hand while the process was down is resumed regardless.
-2. **Verify all Upstox/Telegram network paths against real servers** from a host with a registered static IP: order placement, the portfolio-stream WebSocket, and the daily token flow. Everything on the order side is written but has never touched a live broker.
-3. **A first real order, on a single lot, watched.** The duplicate guard and the uncertain-outcome path are the parts worth proving deliberately rather than discovering mid-session.
-5. If configuration ever outgrows environment variables, introduce a loader then — deliberately not scaffolded ahead of need. Milestone set *numbers* are intended to stay in code, since they encode trading intent worth reviewing in a diff; only the *choice* of set is a runtime decision.
-6. Add further milestone sets if a distinct instrument class needs them — a set carries its own rungs, phase points, ownership ladder and hard stop, which is the axis `ExitModel` was scaffolded for before it was removed.
-7. Wire `ParallelCombinationExecutor` into `SimulationRunner.resolveExecutor()`.
-8. Implement `CandleGenerator` and start consuming `Candle5m`.
-9. Add direct unit tests for the `runner` package's orchestration classes.
-10. Consider a `HISTORICAL` `MarketDataFeed` implementation for backtesting against real past data.
-11. Decide the fate of unused `TradeContext` fields (`atr`, `ownershipPercentage`, `hybridEnabled`/`hybridUpdateCount`).
+1. **Verify all Upstox/Telegram network paths against real servers** from a host with a registered static IP: order placement, the portfolio-stream WebSocket, and the daily token flow. Everything on the order side is written but has never touched a live broker.
+2. **A first real order, on a single lot, watched.** The duplicate guard and the uncertain-outcome path are the parts worth proving deliberately rather than discovering mid-session.
+3. **Reconcile against holdings as well as positions**, if delivery trades ever become part of how this is used.
+4. If configuration ever outgrows environment variables, introduce a loader then — deliberately not scaffolded ahead of need. Milestone set *numbers* are intended to stay in code, since they encode trading intent worth reviewing in a diff; only the *choice* of set is a runtime decision.
+5. Add further milestone sets if a distinct instrument class needs them — a set carries its own rungs, phase points, ownership ladder and hard stop, which is the axis `ExitModel` was scaffolded for before it was removed.
+6. Wire `ParallelCombinationExecutor` into `SimulationRunner.resolveExecutor()`.
+7. Implement `CandleGenerator` and start consuming `Candle5m`.
+8. Add direct unit tests for the `runner` package's orchestration classes.
+9. Consider a `HISTORICAL` `MarketDataFeed` implementation for backtesting against real past data.
+

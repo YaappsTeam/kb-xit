@@ -4,7 +4,7 @@ A trade exit management system: you tell it you're in a trade, it watches the li
 
 **It never places a buy order.** Every position it manages was bought elsewhere and handed to it — so it can also be handed back, without closing anything.
 
-Right now the runnable mode is **paper trading**, on either a simulated price feed or **real Upstox market data**. You declare a trade via Telegram, the engine watches the price and manages the exit, and every figure it reports is **net of brokerage and taxes**. Real sell-order placement is on the roadmap; see [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+Right now the runnable mode is **paper trading**, on either a simulated price feed or **real Upstox market data**. You declare a trade via Telegram, the engine watches the price and manages the exit, and every figure it reports is **net of brokerage and taxes**. Real sell orders are written but off by default — see [Placing real sell orders](#placing-real-sell-orders) for what turning them on requires.
 
 ## Prerequisites
 
@@ -96,7 +96,7 @@ This needs an Upstox **Analytics Token**, which is not the same as the standard 
 | Market data + WebSocket streaming | ✅ (no static IP needed) | ✅ |
 | Placing/modifying orders | ❌ read-only | ✅ |
 
-Live prices only ever need the first one — so live-data mode involves **no daily login**, and the token it uses physically cannot place an order. The daily token and the [static-IP registration](PRODUCT_REQUIREMENTS.md) come in later, with live order placement (Phase 3).
+Live prices only ever need the first one — so live-data mode involves **no daily login**, and the token it uses physically cannot place an order. The daily token and a registered static IP are needed only for the things that touch your account: placing orders, and checking positions.
 
 Add to your `run.ps1` / `run.sh`:
 
@@ -315,7 +315,30 @@ What's restored matters more than that it is:
 
 The file is written to a temp file and moved into place, so a crash mid-write can't leave something unparseable. A corrupt or missing file means starting with no trades rather than refusing to start — with nothing watching the positions, failing to start is the worse outcome.
 
-On resume you get a summary and a warning: **this system can't know whether the position is still open at your broker.** If you closed it by hand while the process was down, it will be resumed here regardless — check, and `/release` anything that's gone.
+On resume you get a summary and a warning: a position closed by hand while the process was down is resumed here regardless. Send a `/token` and that gets checked automatically — see below.
+
+## Checking against your broker
+
+`/positions` asks Upstox what's actually open and compares it with what's being managed here. It runs automatically the moment you send a `/token` and there are open trades, since that's the first point at which the broker can be asked anything.
+
+Three answers:
+
+| | What it means | What happens |
+|---|---|---|
+| **Confirmed** | Broker agrees | Nothing; carry on |
+| **Gone / reduced** | Broker holds less than this system thinks, or nothing | The trade is stood down to `OBSERVED` |
+| **Untracked** | Broker holds something this system isn't watching | Offered for adoption, same buttons as a detected fill |
+
+**A discrepancy stops the engine acting, and nothing more.** It's never dropped. Acting is what makes a stale trade dangerous: an exit sized from a position that has shrunk sells quantity that isn't there, and selling past flat opens a short — the exit engine opening a trade, which is exactly what it must never do. But the broker can be the one that's wrong (a settled delivery holding, a bad minute at the API), and dropping the trade would be unrecoverable while standing down isn't. You get `/manage <orderId>` to hand it back or `/release <orderId>` to drop it.
+
+If the check itself fails, **nothing changes** and it says so. An error read as "the broker holds nothing" would stand down every open trade at once.
+
+Two things worth knowing:
+
+- It reads *today's positions*, not delivery holdings. A position left open overnight in delivery moves out of positions and will be reported as gone — the reason a discrepancy stands a trade down rather than dropping it.
+- The broker reports positions, not orders, so two trades on the same strike are one position to it. A shortfall can't be attributed to one of them, so both stand down.
+
+Untracked positions are how a trade bought *before* the app started gets found: the fill feed only sees fills while it's connected.
 
 ## Taking back control
 
@@ -377,6 +400,7 @@ While `/pause` is on you're still told about detected positions, but accepting o
    release - Stop watching entirely; position stays open
    manage - Hand a trade back to the engine
    adopt - Take on a position detected at your broker
+   positions - Check what is managed here against what your broker holds
    pause - Stop taking on new trades
    resume - Resume taking on new trades
    risk - Rupees a trade may lose at its stop: /risk <amount> or /risk off
@@ -407,6 +431,7 @@ While `/pause` is on you're still told about detected positions, but accepting o
 | `/ladder <name>` | Select a set directly, skipping the buttons |
 | `/risk` | Show the current per-trade risk ceiling |
 | `/risk <amount>` / `/risk off` | Set or remove it, applying to trades opened afterwards |
+| `/positions` | Check what is managed here against what your broker actually holds |
 | `/adopt` | Show positions detected at your broker as buttons, and take one on |
 | `/adopt <orderId>` | Accept one directly, skipping the buttons |
 | `/token` | Show whether a usable order token is held (never shows the token) |

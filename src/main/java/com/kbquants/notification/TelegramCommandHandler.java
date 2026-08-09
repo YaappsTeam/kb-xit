@@ -88,6 +88,7 @@ public class TelegramCommandHandler {
             "/refresh — re-fetch the instrument master now",
             "/token [value] — supply the daily order-placement token; bare shows its status",
             "/adopt [orderId] — take on a position detected at your broker; bare lists them",
+            "/positions — check what is managed here against what your broker holds",
             "/help — this message",
             "",
             "Every percentage reported is net of brokerage and taxes.");
@@ -261,6 +262,7 @@ public class TelegramCommandHandler {
             case "/risk" -> dispatchRisk(parts, text, listener);
             case "/token" -> dispatchToken(parts, listener);
             case "/adopt" -> dispatchAdopt(parts, listener);
+            case "/positions" -> listener.onReconcileRequested();
             case "/pause" -> listener.onAdoptionPaused(true);
             case "/resume" -> listener.onAdoptionPaused(false);
             case "/release" -> dispatchMode(parts, rawText(text), MonitorMode.RELEASED, listener);

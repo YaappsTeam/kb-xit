@@ -29,8 +29,14 @@ import com.kbquants.session.TradeFillEvent;
 import com.kbquants.session.TradeSnapshot;
 import com.kbquants.session.TradeStore;
 import com.kbquants.session.NoOpTradeStore;
+import com.kbquants.session.BrokerPosition;
+import com.kbquants.session.NoOpPositionQuery;
+import com.kbquants.session.PositionQuery;
+import com.kbquants.session.PositionQueryException;
+import com.kbquants.session.PositionReconciliation;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Set;
@@ -118,6 +124,12 @@ public class TradeMonitor implements TelegramCommandListener {
     private final ExitOrderPlacer exitOrderPlacer;
 
     /**
+     * Asks the broker what is actually open, so a trade closed by hand --
+     * or while this was down -- does not go on being managed.
+     */
+    private final PositionQuery positionQuery;
+
+    /**
      * The daily order-placement token, supplied at runtime via /token.
      * Held here because the Telegram control plane is where it arrives.
      */
@@ -200,6 +212,16 @@ public class TradeMonitor implements TelegramCommandListener {
                 riskSettings, tradeStore, exitOrderPlacer, tradingToken, false);
     }
 
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken,
+                         boolean requireExplicitAdoption) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, exitOrderPlacer, tradingToken, requireExplicitAdoption,
+                new NoOpPositionQuery());
+    }
+
     /**
      * Takes the ActiveLadder rather than a ladder so that position sizing,
      * which needs the same hard stop, cannot drift out of step when the
@@ -209,7 +231,8 @@ public class TradeMonitor implements TelegramCommandListener {
                          Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
                          ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
                          ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken,
-                         boolean requireExplicitAdoption) {
+                         boolean requireExplicitAdoption, PositionQuery positionQuery) {
+        this.positionQuery = Objects.requireNonNull(positionQuery, "positionQuery must not be null");
         this.requireExplicitAdoption = requireExplicitAdoption;
         this.tradingToken = Objects.requireNonNull(tradingToken, "tradingToken must not be null");
         this.exitOrderPlacer = Objects.requireNonNull(exitOrderPlacer, "exitOrderPlacer must not be null");
@@ -815,9 +838,122 @@ public class TradeMonitor implements TelegramCommandListener {
             notifier.send("Token accepted — " + tradingToken.describe()
                     + System.lineSeparator()
                     + "Delete your message if it is still in the chat: it contains a live credential.");
+
+            // The first moment the broker can be asked anything. Trades
+            // restored from before the restart have been managed on faith
+            // until now, so this is when that gets checked -- off the
+            // command thread, which would otherwise stop answering
+            // Telegram for as long as the call takes.
+            if (positionQuery.isAvailable() && !activeTrades.isEmpty()) {
+                Thread reconcile = new Thread(this::onReconcileRequested, "startup-reconcile");
+                reconcile.setDaemon(true);
+                reconcile.start();
+            }
         } catch (IllegalArgumentException e) {
             notifier.send("That token looks empty — send /token <value>");
         }
+    }
+
+    /**
+     * Checks what this system is managing against what the broker actually
+     * holds.
+     * <p>
+     * Nothing is ever dropped on the strength of this. A trade the broker
+     * does not report is moved to OBSERVED: the engine stops acting on it,
+     * but keeps watching and reporting, and the user decides. Both possible
+     * errors are real -- a position genuinely closed by hand, and one the
+     * API simply did not list (a delivery holding, a settled position, a
+     * bad minute at the broker) -- and dropping the trade would be
+     * unrecoverable while merely standing down is not.
+     * <p>
+     * Acting is what makes a stale trade dangerous: an exit sized from what
+     * this system remembers would sell quantity that is no longer there,
+     * and selling past flat is a short.
+     */
+    @Override
+    public void onReconcileRequested() {
+
+        if (!positionQuery.isAvailable()) {
+            notifier.send("Cannot check your broker: " + tradingToken.describe());
+            return;
+        }
+
+        List<BrokerPosition> positions;
+        try {
+            positions = positionQuery.openPositions();
+        } catch (PositionQueryException e) {
+            log.warn("Reconciliation could not reach the broker: {}", e.getMessage());
+            notifier.send("Could not check your broker (" + e.getMessage() + ")."
+                    + System.lineSeparator() + "Nothing has been changed — trades are still managed as they were.");
+            return;
+        }
+
+        List<PositionReconciliation.TrackedPosition> tracked = openTrades()
+                .map(trade -> new PositionReconciliation.TrackedPosition(
+                        trade.fill.getOrderId(), trade.fill.getInstrumentKey(), trade.fill.getDisplaySymbol(),
+                        trade.fill.getFilledQuantity(), trade.mode == MonitorMode.MANAGED))
+                .toList();
+
+        PositionReconciliation.Report report = PositionReconciliation.compare(tracked, positions);
+        applyReconciliation(report);
+    }
+
+    private void applyReconciliation(PositionReconciliation.Report report) {
+
+        StringBuilder summary = new StringBuilder("Checked against your broker:");
+        summary.append(System.lineSeparator())
+               .append(String.format("  %d confirmed still open", report.getConfirmed().size()));
+
+        for (PositionReconciliation.Discrepancy discrepancy : report.getDiscrepancies()) {
+
+            String orderId = discrepancy.getTracked().getOrderId();
+            ActiveTrade trade = activeTrades.get(orderId);
+            if (trade == null) {
+                continue;
+            }
+
+            summary.append(System.lineSeparator()).append("  ").append(discrepancy.describe());
+
+            if (trade.mode == MonitorMode.MANAGED) {
+                trade.mode = MonitorMode.OBSERVED;
+                log.warn("Reconciliation: orderId={} is {} at the broker — stood down to OBSERVED",
+                        orderId, discrepancy.getKind());
+                summary.append(System.lineSeparator())
+                       .append("    → stopped acting on it (now OBSERVED). /manage ").append(orderId)
+                       .append(" to hand it back, /release ").append(orderId).append(" to drop it.");
+            } else {
+                summary.append(System.lineSeparator())
+                       .append("    → already ").append(trade.mode).append("; nothing changed.");
+            }
+        }
+
+        if (!report.getDiscrepancies().isEmpty()) {
+            persist();
+        }
+
+        for (BrokerPosition position : report.getUntracked()) {
+            summary.append(System.lineSeparator())
+                   .append(String.format("  %s x%d open at your broker, not managed here",
+                           position.getDisplaySymbol(), position.getQuantity()));
+        }
+
+        notifier.send(summary.toString());
+
+        // Offered afterwards, and one message each, so the summary stays
+        // readable and each offer carries its own pair of buttons.
+        for (BrokerPosition position : report.getUntracked()) {
+            onDetectedFill(toFill(position));
+        }
+    }
+
+    /**
+     * A position is not a fill, so the id is synthesised. Prefixed so it is
+     * obvious in /status and in the buttons that this came from a
+     * reconciliation rather than from an order this system saw happen.
+     */
+    private static TradeFillEvent toFill(BrokerPosition position) {
+        return new TradeFillEvent("recon:" + position.getInstrumentKey(), position.getInstrumentKey(),
+                position.getAveragePrice(), position.getQuantity(), 0, position.getDisplaySymbol());
     }
 
     @Override

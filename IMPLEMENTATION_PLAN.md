@@ -6,7 +6,7 @@ Phased roadmap from the current state to a production-ready exit management syst
 
 ## Current state
 
-- **243/243 tests passing**, BUILD SUCCESS. `mvn package` produces a runnable fat jar.
+- **396/396 tests passing**, BUILD SUCCESS. `mvn package` produces a runnable fat jar.
 - Exit engine (phase transitions, stop-loss ratchet, ownership strategies) — complete
 - Simulation framework (price generation, batch execution, reporting) — complete
 - Upstox implementation (OAuth, market data WebSocket, order fill WebSocket, quotes, charges) — complete and broker-agnostic-compatible
@@ -27,7 +27,7 @@ Built since, all on the read-only Analytics Token (no daily login, no static IP)
 
 - ~~The order side is not wired into `Main`~~ — `WATCH_BROKER_FILLS` wires `UpstoxOrderFillFeed`, paired with explicit adoption
 - ~~No real exit order placement~~ — `UpstoxExitOrderPlacer`, behind `PLACE_REAL_ORDERS`
-- No position reconciliation on startup
+- ~~No position reconciliation~~ — `/positions`, and automatically once a `/token` arrives
 - ~~Adoption becomes opt-out the moment the fill feed is wired~~ — it didn't: the feed only ever ships with `requireExplicitAdoption`, and the two are set together in `Main` so neither can be enabled alone
 - Ladder numbers remain unvalidated against data, and the simulation layer cannot validate them (GBM on the instrument vs. an option premium's convexity plus decay)
 
@@ -242,13 +242,21 @@ The stream carries fills for the whole account, so the feed and the adoption gat
 
 **Prerequisite before this step goes live:** Upstox requires order-placement API calls to originate from a **registered static IP** (SEBI algo-trading circular; scoped to order APIs only — market data/portfolio feeds and read-only APIs are unaffected, so nothing before this step needs it). Register the deployment host's static IP via `PUT /user/ip` before the first live `UpstoxExitOrderPlacer` call. Two operational gotchas: the IP can only be changed **once per calendar week**, and each change **invalidates the current access token** — so this isn't something to rotate casually; pick the production host's IP deliberately.
 
-### Step 3.2 — Position reconciliation
+### Step 3.2 — Position reconciliation ✅
 
 | Item | Detail |
 |---|---|
-| New class | `com.kbquants.live.PositionReconciler` |
-| Behavior | On startup, query broker for open positions; synthesize `TradeFillEvent` for each |
-| Interface | Uses a new `PositionQuery` interface (broker-agnostic) |
+| Interface | `com.kbquants.session.PositionQuery` — **throws** rather than returning an empty list when it cannot ask |
+| Comparison | `com.kbquants.session.PositionReconciliation` — pure and static, matched by instrument |
+| Implementations | `UpstoxPositionQuery` (short-term positions), `NoOpPositionQuery` (never available) |
+| Trigger | `/positions`, and automatically on `/token` when trades are open |
+
+Departures from the sketch above:
+
+- **Not on startup.** Reconciliation needs the daily token, and at startup there is none — it arrives via `/token` mid-session. So the automatic run hangs off the token arriving, on its own thread so the command loop keeps answering.
+- **No synthesised trade for every position.** A position this system isn't watching is *offered*, through the same adoption path as a detected fill. Silently taking on whatever the account holds is the failure mode step 3.1b exists to prevent.
+- **A discrepancy stands a trade down; it never drops it.** Acting on a stale position is what causes harm — an exit sized from a position that has shrunk sells quantity that isn't there, and selling past flat opens a short. But the broker can be the one that's wrong (a delivery holding, which lives on a different endpoint), and standing down is recoverable where dropping is not.
+- **The empty-list trap is the design constraint.** "Nothing is open" and "I couldn't ask" are the same value in a `List`, and confusing them would stand down every managed trade at once. Hence a checked `PositionQueryException`.
 
 ### Step 3.3 — ~~ExitModel differentiation~~ (superseded)
 
@@ -265,7 +273,7 @@ Adding a set is adding a `MilestoneLadder` factory; nothing else is needed.
 
 - [x] Real sell orders placed on the broker, behind `PLACE_REAL_ORDERS`, with a duplicate guard and an explicit unknown outcome
 - [x] Positions opened at the broker are detected and offered for adoption
-- [ ] Open positions resumed on startup via reconciliation
+- [x] Managed trades checked against the broker's actual positions, and stood down when they disagree
 - [x] ~~Conservative/Moderate/Aggressive~~ → named milestone sets produce measurably different exit behaviour (step 3.3)
 
 ---

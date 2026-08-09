@@ -123,6 +123,11 @@ class TelegramCommandHandlerTest {
         public void onPendingAdoptionsRequested() {
             events.add("pendingAdoptions");
         }
+
+        @Override
+        public void onReconcileRequested() {
+            events.add("reconcile");
+        }
     }
 
     @Test
@@ -394,7 +399,7 @@ class TelegramCommandHandlerTest {
     void helpTextShouldMentionEveryAcceptedCommand() {
 
         for (String command : List.of("/track", "/exit", "/status", "/ladder", "/refresh",
-                "/pause", "/resume", "/release", "/observe", "/manage", "/risk", "/help", "/token", "/adopt")) {
+                "/pause", "/resume", "/release", "/observe", "/manage", "/risk", "/help", "/token", "/adopt", "/positions")) {
             assertTrue(TelegramCommandHandler.HELP_TEXT.contains(command),
                     () -> command + " missing from help text");
         }
