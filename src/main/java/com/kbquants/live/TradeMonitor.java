@@ -1,7 +1,7 @@
 package com.kbquants.live;
 
 import com.kbquants.domain.ActiveLadder;
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.MilestoneSets;
 import com.kbquants.domain.MonitorMode;
@@ -194,7 +194,7 @@ public class TradeMonitor implements TelegramCommandListener {
 
         TradeContext context = new TradeContext(
                 fill.getOrderId(), fill.getAveragePrice(), breakeven,
-                fill.getFilledQuantity(), ExitModel.MODERATE, OwnershipMode.MILESTONE);
+                fill.getFilledQuantity(), OwnershipMode.MILESTONE);
 
         ActiveTrade trade = new ActiveTrade(fill, context, new ExitEngine(context, ladderForTrade),
                 new ProfitMilestoneTracker(breakeven, ladderForTrade), cost, ladderForTrade);
@@ -308,7 +308,7 @@ public class TradeMonitor implements TelegramCommandListener {
                 snapshot.getDisplaySymbol());
 
         TradeContext context = new TradeContext(snapshot.getOrderId(), snapshot.getEntryPrice(),
-                snapshot.getBasePrice(), snapshot.getQuantity(), ExitModel.MODERATE, OwnershipMode.MILESTONE);
+                snapshot.getBasePrice(), snapshot.getQuantity(), OwnershipMode.MILESTONE);
         context.setCurrentPhase(Phase.valueOf(snapshot.getPhase()));
         context.setCurrentStopLoss(snapshot.getCurrentStopLoss());
 

@@ -1,7 +1,7 @@
 package com.kbquants.simulation.runner;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.TradeContext;
 import org.junit.jupiter.api.DisplayName;
@@ -45,38 +45,6 @@ class MetricsCollectorTest {
 
         assertEquals(10.0, metrics.getMaxFavorableExcursion());
         assertEquals(-5.0, metrics.getMaxAdverseExcursion());
-    }
-
-    @Test
-    @DisplayName("Should detect ownership activation when ownership percentage becomes positive")
-    void shouldDetectOwnershipActivationWhenOwnershipPercentageBecomesPositive() {
-
-        TradeContext context = createContext();
-        context.setOwnershipPercentage(30.0);
-
-        MetricsCollector collector = new MetricsCollector(100.0);
-        collector.onPrice(110.0, context);
-        collector.onCompletion(context);
-
-        TradeMetrics metrics = collector.build("t1", context);
-
-        assertTrue(metrics.isOwnershipActivated());
-    }
-
-    @Test
-    @DisplayName("Should detect hybrid activation when hybrid update count is greater than zero")
-    void shouldDetectHybridActivationWhenHybridUpdateCountIsGreaterThanZero() {
-
-        TradeContext context = createContext();
-        context.setHybridUpdateCount(1);
-
-        MetricsCollector collector = new MetricsCollector(100.0);
-        collector.onPrice(105.0, context);
-        collector.onCompletion(context);
-
-        TradeMetrics metrics = collector.build("t1", context);
-
-        assertTrue(metrics.isHybridActivated());
     }
 
     @Test
@@ -130,6 +98,6 @@ class MetricsCollectorTest {
 
     private TradeContext createContext() {
         return new TradeContext("t1", 100.0, 100.0, 1,
-                ExitModel.MODERATE, OwnershipMode.CONTINUOUS);
+                OwnershipMode.CONTINUOUS);
     }
 }

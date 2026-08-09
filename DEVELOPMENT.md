@@ -38,7 +38,6 @@ com.kbquants
 |---|---|
 | `TradeContext` | The single mutable state object for one trade: id, entry price, base price, quantity, current phase, current stop-loss, ATR, ownership %, hybrid-update count, `forceExited`/`isClosed` flags. Everything else in the engine reads/writes this object. |
 | `Phase` (enum) | Trade lifecycle stage: `PHASE_1` (initial risk validation) → `PHASE_2` (base capital protection) → `PHASE_3` (profit protection) → `PHASE_4` (forced EOD exit, defined but not yet wired into transitions). |
-| `ExitModel` (enum) | Exit "personality": `CONSERVATIVE`, `MODERATE`, `AGGRESSIVE`. Currently just a tag threaded through the engine/metrics — no model-specific behavior branches on it yet (see §7 gaps). |
 | `OwnershipMode` (enum) | `CONTINUOUS` or `MILESTONE` — selects which `OwnershipStrategy` implementation is used. |
 | `Milestone` | Immutable single rung: a **net-profit** `percent` (measured above `basePrice`, the cost-inclusive breakeven), an optional `phaseTransition` it triggers, and an optional `ownershipLockPercent` it locks. |
 | `MilestoneLadder` | The single source of truth for every threshold in the system, **including the hard stop** — which lives here rather than as a constant because 20% below entry is a disaster stop on an equity and a routine wiggle on an option premium. Two named sets: `EQUITY` `[1, 2, 3, 5, 8, 13, 21, 34, 55]%` with PHASE_2 at 2%, PHASE_3 at 5% and a 20% hard stop; `OPTIONS` `[1, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233]%` with PHASE_2 at 8%, PHASE_3 at 21% and a 40% hard stop. `PhaseManager`, `MilestoneOwnershipStrategy`, `ProfitMilestoneTracker` and `StopLossEngine` all read the same instance. |
@@ -196,10 +195,8 @@ Unchanged from the previous milestone.
 ## 9. Known gaps / explicitly unfinished areas
 
 - **No configuration file.** Settings come from environment variables (`MARKET_DATA`, `CAPITAL_PER_TRADE`, `MAX_RISK_PER_TRADE`, `EOD_EXIT_TIME`, …) and, for the milestone sets, from code. An empty `com.kbquants.config` package scaffolding a YAML/JSON loader was deleted: it advertised configurability that did not exist, and nothing referenced it.
-- **`ExitModel` (Conservative/Moderate/Aggressive) has no behavioral differentiation** — same as before.
 - **Parallel execution isn't reachable from `SimulationRunner`** — same as before.
 - **`CandleGenerator`** — still an empty stub.
-- **`hybridEnabled`/`hybridUpdateCount`/`atr`/`ownershipPercentage` fields on `TradeContext`** — still unused hooks.
 - **`PHASE_4` (forced EOD exit)** — implemented via `EndOfDaySchedule`, opt-in through `EOD_EXIT_TIME`. Closes `MANAGED` trades at a wall-clock time in the market's zone; `OBSERVED` trades are warned about rather than sold, `RELEASED` ignored.
 - **The order side is not wired into `Main`** — live *market data* is (`MARKET_DATA=live`), but `UpstoxOrderFillFeed` is still unused there, so trades only ever arrive via `/track`. Wiring it is Phase 3. When it happens, note that it streams fills for the **whole account**: adoption becomes opt-out, and `/pause` (or an explicit adopt step) is what prevents unrelated positions being managed.
 - **The app never places buy orders** — it is purely an exit engine, placing sell orders for positions bought elsewhere. `/track` declares an existing position rather than ordering anything; the name is a legacy misnomer.
@@ -215,7 +212,7 @@ Unchanged from the previous milestone.
 ## 10. Test suite summary
 
 ```
-309 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+307 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |
@@ -266,7 +263,7 @@ Run with: `mvn test`. Build a runnable jar with `mvn package`.
 3. **Real exit order placement** (limit or GTT) in `TradeMonitor.forceExit`/stop-loss-hit path, via a new `ExitOrderPlacer` interface (broker-agnostic, mirroring `OrderFillFeed`/`MarketDataFeed`).
 4. **Position reconciliation on startup** for live mode.
 5. If configuration ever outgrows environment variables, introduce a loader then — deliberately not scaffolded ahead of need. Milestone set *numbers* are intended to stay in code, since they encode trading intent worth reviewing in a diff; only the *choice* of set is a runtime decision.
-6. Give `ExitModel` real behavioral differences.
+6. Add further milestone sets if a distinct instrument class needs them — a set carries its own rungs, phase points, ownership ladder and hard stop, which is the axis `ExitModel` was scaffolded for before it was removed.
 7. Wire `ParallelCombinationExecutor` into `SimulationRunner.resolveExecutor()`.
 8. Implement `CandleGenerator` and start consuming `Candle5m`.
 9. Add direct unit tests for the `runner` package's orchestration classes.

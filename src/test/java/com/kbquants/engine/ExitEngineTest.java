@@ -1,6 +1,6 @@
 package com.kbquants.engine;
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.domain.TradeContext;
@@ -15,7 +15,7 @@ class ExitEngineTest {
     void shouldApplyHardSafetyBeforePhaseLogic() {
 
         TradeContext context = new TradeContext("T1", 100.0, 101.0, 1,
-                ExitModel.MODERATE, OwnershipMode.CONTINUOUS);
+                OwnershipMode.CONTINUOUS);
 
         ExitEngine engine = new ExitEngine(context);
 
@@ -28,7 +28,7 @@ class ExitEngineTest {
     void shouldMoveThroughAllPhasesCorrectly() {
 
         TradeContext context = new TradeContext("T1", 100.0, 101.0, 1,
-                ExitModel.MODERATE, OwnershipMode.CONTINUOUS);
+                OwnershipMode.CONTINUOUS);
 
         ExitEngine engine = new ExitEngine(context);
         assertEquals(Phase.PHASE_1, context.getCurrentPhase());
@@ -44,7 +44,7 @@ class ExitEngineTest {
     void shouldApplyBaseProtectionInPhase2() {
 
         TradeContext context = new TradeContext("T1", 100.0, 101.0, 1,
-                ExitModel.MODERATE, OwnershipMode.CONTINUOUS);
+                OwnershipMode.CONTINUOUS);
 
         ExitEngine engine = new ExitEngine(context);
 
@@ -57,7 +57,7 @@ class ExitEngineTest {
     void shouldApplyContinuousOwnershipCorrectly() {
 
         TradeContext context = new TradeContext("T1", 100.0, 101.0, 1,
-                ExitModel.MODERATE, OwnershipMode.CONTINUOUS);
+                OwnershipMode.CONTINUOUS);
 
         ExitEngine engine = new ExitEngine(context);
 
@@ -74,7 +74,7 @@ class ExitEngineTest {
 
         TradeContext context = new TradeContext(
                 "T1", 100.0, 101.0, 1,
-                ExitModel.MODERATE, OwnershipMode.MILESTONE);
+                OwnershipMode.MILESTONE);
 
         ExitEngine engine = new ExitEngine(context);
 
@@ -92,7 +92,7 @@ class ExitEngineTest {
 
         TradeContext context = new TradeContext(
                 "T1", 100.0, 101.0, 1,
-                ExitModel.MODERATE, OwnershipMode.CONTINUOUS);
+                OwnershipMode.CONTINUOUS);
 
         ExitEngine engine = new ExitEngine(context);
 
@@ -119,7 +119,7 @@ class ExitEngineTest {
 
         TradeContext context = new TradeContext(
                 "T1", 100.0, 101.0, 1,
-                ExitModel.MODERATE, OwnershipMode.MILESTONE);
+                OwnershipMode.MILESTONE);
 
         ExitEngine engine = new ExitEngine(context);
 
@@ -141,7 +141,7 @@ class ExitEngineTest {
 
         TradeContext context = new TradeContext(
                 "T1", 100.0, 101.0, 1,
-                ExitModel.MODERATE, OwnershipMode.MILESTONE);
+                OwnershipMode.MILESTONE);
 
         new ExitEngine(context).onPriceUpdate(105.0, context);
 

@@ -1,7 +1,7 @@
 package com.kbquants.simulation.runner;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.TradeContext;
 import com.kbquants.engine.ExitEngine;
@@ -17,7 +17,7 @@ import java.util.UUID;
 /**
  * Sequential implementation of CombinationExecutor.
  * <p>
- * Executes all ExitModel × OwnershipMode combinations
+ * Executes every OwnershipMode over a shared price path
  * using a single shared price path.
  * <p>
  * Engine logic remains untouched and deterministic.
@@ -44,9 +44,7 @@ public class SequentialCombinationExecutor implements CombinationExecutor {
 
         Instant startTime = Instant.now();
 
-        int totalCombinations =
-                request.getExitModels().size() *
-                        request.getOwnershipModes().size();
+        int totalCombinations = request.getOwnershipModes().size();
 
         log.info("Sequential simulation started. Total combinations={}", totalCombinations);
         log.info("MarketRegime={}, ExecutionMode={}",
@@ -55,25 +53,15 @@ public class SequentialCombinationExecutor implements CombinationExecutor {
 
         List<TradeMetrics> results = new ArrayList<>();
 
-        for (ExitModel exitModel : request.getExitModels()) {
-            for (OwnershipMode ownershipMode : request.getOwnershipModes()) {
+        for (OwnershipMode ownershipMode : request.getOwnershipModes()) {
 
-                log.debug("Running combination: ExitModel={}, OwnershipMode={}",
-                        exitModel, ownershipMode);
+            log.debug("Running combination: OwnershipMode={}", ownershipMode);
 
-                TradeMetrics metrics = runSingleCombination(
-                        pricePath,
-                        exitModel,
-                        ownershipMode
-                );
+            TradeMetrics metrics = runSingleCombination(pricePath, ownershipMode);
+            results.add(metrics);
 
-                results.add(metrics);
-
-                log.debug("Completed combination: ExitModel={}, OwnershipMode={}, FinalPhase={}",
-                        exitModel,
-                        ownershipMode,
-                        metrics.getFinalPhase());
-            }
+            log.debug("Completed combination: OwnershipMode={}, FinalPhase={}",
+                    ownershipMode, metrics.getFinalPhase());
         }
 
         Duration duration = Duration.between(startTime, Instant.now());
@@ -85,19 +73,19 @@ public class SequentialCombinationExecutor implements CombinationExecutor {
     }
 
     /**
-     * Executes one isolated ExitModel × OwnershipMode run.
+     * Executes one isolated OwnershipMode run.
      * <p>
      * Guarantees:
      * - Fresh TradeContext
      * - Fresh ExitEngine
      * - No shared state
      */
-    private TradeMetrics runSingleCombination(List<Double> pricePath, ExitModel exitModel, OwnershipMode ownershipMode) {
+    private TradeMetrics runSingleCombination(List<Double> pricePath, OwnershipMode ownershipMode) {
         double entryPrice = pricePath.get(0);
         double basePrice = entryPrice * DEFAULT_BASE_PRICE_MULTIPLIER;
 
         String tradeId = UUID.randomUUID().toString();
-        TradeContext context = new TradeContext(tradeId, entryPrice, basePrice, DEFAULT_QUANTITY, exitModel, ownershipMode);
+        TradeContext context = new TradeContext(tradeId, entryPrice, basePrice, DEFAULT_QUANTITY, ownershipMode);
 
         ExitEngine engine = new ExitEngine(context);
         MetricsCollector collector = new MetricsCollector(entryPrice);
@@ -112,12 +100,12 @@ public class SequentialCombinationExecutor implements CombinationExecutor {
         return collector.build(tradeId, context);
     }
 
-//    private TradeMetrics runSingleCombination(List<Double> pricePath, ExitModel exitModel, OwnershipMode ownershipMode) {
+//    private TradeMetrics runSingleCombination(List<Double> pricePath, OwnershipMode ownershipMode) {
 //        double entryPrice = pricePath.get(0);
 //        double basePrice = entryPrice * DEFAULT_BASE_PRICE_MULTIPLIER;
 //
 //        String tradeId = UUID.randomUUID().toString();
-//        TradeContext context = new TradeContext(tradeId, entryPrice, basePrice, DEFAULT_QUANTITY, exitModel, ownershipMode);
+//        TradeContext context = new TradeContext(tradeId, entryPrice, basePrice, DEFAULT_QUANTITY, ownershipMode);
 //        ExitEngine engine = new ExitEngine(context);
 //
 //        for (Double price : pricePath) {
@@ -125,6 +113,5 @@ public class SequentialCombinationExecutor implements CombinationExecutor {
 //            if (context.isClosed()) break; // respect lifecycle termination
 //        }
 //
-//        return new TradeMetrics(exitModel, ownershipMode, context.getCurrentStopLoss(), context.getCurrentPhase());
 //    }
 }

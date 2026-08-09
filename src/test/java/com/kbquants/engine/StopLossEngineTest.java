@@ -1,7 +1,7 @@
 package com.kbquants.engine;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.domain.TradeContext;
@@ -34,7 +34,6 @@ class StopLossEngineTest {
                 100.0,     // entry price
                 101.0,     // base price
                 1,
-                ExitModel.MODERATE,
                 OwnershipMode.CONTINUOUS
         );
     }
@@ -132,7 +131,7 @@ class StopLossEngineTest {
     void baseProtectionShouldStillApplyOnceBeyondPhase2() {
 
         TradeContext context = new TradeContext(
-                "T1", 100.0, 101.0, 1, ExitModel.MODERATE, OwnershipMode.MILESTONE);
+                "T1", 100.0, 101.0, 1, OwnershipMode.MILESTONE);
         context.setCurrentPhase(Phase.PHASE_3);
 
         new StopLossEngine().applyBaseProtectionIfEligible(context);

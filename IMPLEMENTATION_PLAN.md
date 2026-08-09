@@ -234,14 +234,16 @@ Steps 2.1, 2.2, and 2.4 can be done in parallel. Steps 2.3 and 2.5 follow. Step 
 | Behavior | On startup, query broker for open positions; synthesize `TradeFillEvent` for each |
 | Interface | Uses a new `PositionQuery` interface (broker-agnostic) |
 
-### Step 3.3 — ExitModel differentiation
+### Step 3.3 — ~~ExitModel differentiation~~ (superseded)
 
-| Item | Detail |
-|---|---|
-| Conservative | Tighter hard safety (15%), higher ownership locks |
-| Moderate | Current defaults |
-| Aggressive | Wider hard safety (25%), lower initial ownership locks |
-| Config-driven | Per-model parameters from `MilestoneLadder` variants |
+Delivered as **named milestone sets** instead. What this step described —
+per-model hard stops and ownership ladders, driven by `MilestoneLadder`
+variants — is what `MilestoneSets` now does, selectable at runtime via
+`/ladder`. `ExitModel` itself was removed: it never branched behaviour,
+and keeping a second axis for the same idea would have meant two ways to
+express one decision.
+
+Adding a set is adding a `MilestoneLadder` factory; nothing else is needed.
 
 ### Acceptance criteria (Phase 3)
 

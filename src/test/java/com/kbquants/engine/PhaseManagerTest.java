@@ -1,6 +1,6 @@
 package com.kbquants.engine;
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.domain.TradeContext;
@@ -23,7 +23,6 @@ class PhaseManagerTest {
                 100.0,
                 101.0,
                 1,
-                ExitModel.MODERATE,
                 OwnershipMode.CONTINUOUS
         );
     }
@@ -105,7 +104,7 @@ class PhaseManagerTest {
     void shouldMeasureFromBreakevenNotEntry() {
 
         TradeContext costly = new TradeContext(
-                "T2", 100.0, 110.0, 1, ExitModel.MODERATE, OwnershipMode.CONTINUOUS);
+                "T2", 100.0, 110.0, 1, OwnershipMode.CONTINUOUS);
 
         phaseManager.evaluatePhaseTransition(105.0, costly);
 

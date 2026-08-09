@@ -1,6 +1,6 @@
 package com.kbquants.simulation.report;
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.simulation.runner.SimulationResult;
@@ -35,17 +35,16 @@ class JsonReportFormatterTest {
         String json = formatter.format(result);
 
         assertTrue(json.contains("\"results\""));
-        assertTrue(json.contains("\"exitModel\""));
         assertTrue(json.contains("\"ownershipMode\""));
         assertTrue(json.contains("\"finalStopLoss\""));
         assertTrue(json.contains("\"mfe\""));
         assertTrue(json.contains("\"mae\""));
-        assertTrue(json.contains("MODERATE"));
+        assertTrue(json.contains("CONTINUOUS"));
     }
 
     private TradeMetrics createMetrics() {
-        return new TradeMetrics(ExitModel.MODERATE, OwnershipMode.CONTINUOUS,
+        return new TradeMetrics(OwnershipMode.CONTINUOUS,
                 95.0, Phase.PHASE_3, 10.0, -5.0,
-                true, false, false, true);
+                false, true);
     }
 }

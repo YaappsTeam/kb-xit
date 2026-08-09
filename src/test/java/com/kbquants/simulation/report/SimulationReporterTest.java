@@ -1,7 +1,7 @@
 package com.kbquants.simulation.report;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.simulation.runner.SimulationResult;
@@ -57,13 +57,13 @@ class SimulationReporterTest {
         String csv = reporter.exportAsCsv(result);
 
         assertNotNull(csv);
-        assertTrue(csv.contains("ExitModel"));
+        assertTrue(csv.contains("OwnershipMode"));
     }
 
     private SimulationResult createResult() {
-        TradeMetrics metrics = new TradeMetrics(ExitModel.MODERATE, OwnershipMode.CONTINUOUS,
+        TradeMetrics metrics = new TradeMetrics(OwnershipMode.CONTINUOUS,
                 95.0, Phase.PHASE_3, 10.0, -5.0,
-                true, false, false, true);
+                false, true);
         return new SimulationResult(List.of(metrics));
     }
 }
