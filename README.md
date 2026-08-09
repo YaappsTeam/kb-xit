@@ -114,6 +114,8 @@ You should see `... started in PAPER trading mode with LIVE Upstox market data`.
 
 Ticks only arrive while the market is open, so outside market hours the engine sits idle rather than reporting an error.
 
+**If the price feed drops, you are told.** Without prices the stop-loss stops being enforced, and nothing else would make that visible — the bot looks healthy while the position is unprotected. The alert names the stop that is no longer being applied; reconnection is automatic and recovery is announced too. Each feed is closed when its trade closes or is released, so a session's trades don't leave a connection open apiece.
+
 ## Symbols, prices and lot sizing (live mode)
 
 Typing `NSE_FO|45148` while scalping is not realistic, so in live mode `/track` takes a **trading symbol** and fills in the rest:

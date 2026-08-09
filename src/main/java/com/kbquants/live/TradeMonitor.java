@@ -167,13 +167,66 @@ public class TradeMonitor implements TelegramCommandListener {
                 fill.getOrderId(), fill.getInstrumentKey(), fill.getAveragePrice(), breakeven, cost);
         notifier.send(buildTrackingMessage(fill, cost, breakeven, ladderForTrade));
 
-        feedFactory.apply(fill).start((price, timestamp) -> onPrice(trade, price));
+        startFeed(trade);
+    }
+
+    /**
+     * The feed is retained so it can be closed again. Previously it was
+     * created and discarded, which left a WebSocket (or a scheduler thread)
+     * open for every trade ever taken, for the life of the process.
+     */
+    private void startFeed(ActiveTrade trade) {
+
+        MarketDataFeed feed = feedFactory.apply(trade.fill);
+        trade.feed = feed;
+
+        feed.setFailureListener(reason -> reportFeedFailure(trade, reason));
+        feed.start((price, timestamp) -> onPrice(trade, price));
+    }
+
+    /**
+     * Closing the feed is what makes a trade finished: without prices there
+     * is nothing left to react to. Safe to call more than once.
+     */
+    private void stopFeed(ActiveTrade trade) {
+        MarketDataFeed feed = trade.feed;
+        trade.feed = null;
+        if (feed != null) {
+            feed.stop();
+        }
+    }
+
+    /**
+     * A dead feed means the stop-loss is no longer being enforced, and
+     * nothing else would make that visible -- prices simply stop arriving
+     * while the bot looks healthy. Reported once per outage so a flapping
+     * connection cannot spam the chat.
+     */
+    private void reportFeedFailure(ActiveTrade trade, String reason) {
+
+        if (trade.context.isClosed() || trade.mode == MonitorMode.RELEASED || trade.feedFailureReported) {
+            return;
+        }
+        trade.feedFailureReported = true;
+
+        log.error("Price feed problem for orderId={} instrument={}: {}",
+                trade.fill.getOrderId(), trade.fill.getInstrumentKey(), reason);
+        notifier.send(String.format(
+                "⚠ %s: price feed dropped (%s). The stop at %.2f is NOT being enforced until it reconnects. "
+                        + "Reconnection is automatic; if prices do not resume, manage this position yourself.",
+                trade.fill.getDisplaySymbol(), reason, trade.context.getCurrentStopLoss()));
     }
 
     void onPrice(ActiveTrade trade, double currentPrice) {
 
         if (trade.context.isClosed() || trade.mode == MonitorMode.RELEASED) {
             return;
+        }
+
+        if (trade.feedFailureReported) {
+            trade.feedFailureReported = false;
+            notifier.send(String.format("%s: price feed recovered, back to %.2f — the stop is being enforced again",
+                    trade.fill.getDisplaySymbol(), currentPrice));
         }
 
         trade.lastPrice = currentPrice;
@@ -200,6 +253,7 @@ public class TradeMonitor implements TelegramCommandListener {
             }
 
             trade.engine.forceExit(trade.context, currentPrice);
+            stopFeed(trade);
             log.info("Stop-loss hit: orderId={} instrument={} price={} stopLoss={}",
                     trade.fill.getOrderId(), trade.fill.getInstrumentKey(), currentPrice, stopLoss);
             notifier.send(String.format("%s: stop-loss hit at %.2f (sl=%.2f) — trade closed%n%s",
@@ -413,8 +467,20 @@ public class TradeMonitor implements TelegramCommandListener {
         }
 
         for (ActiveTrade trade : targets) {
+            MonitorMode previous = trade.mode;
             trade.mode = mode;
-            log.info("Monitor mode for orderId={} set to {}", trade.fill.getOrderId(), mode);
+
+            // RELEASED means stop watching, so the connection goes with it;
+            // returning to a watching mode has to bring it back, or the
+            // trade would sit there silently receiving nothing.
+            if (mode == MonitorMode.RELEASED) {
+                stopFeed(trade);
+            } else if (previous == MonitorMode.RELEASED && trade.feed == null) {
+                trade.feedFailureReported = false;
+                startFeed(trade);
+            }
+
+            log.info("Monitor mode for orderId={} set to {} (was {})", trade.fill.getOrderId(), mode, previous);
             notifier.send(describeModeChange(trade, mode));
         }
     }
@@ -518,6 +584,7 @@ public class TradeMonitor implements TelegramCommandListener {
     private void forceExit(ActiveTrade trade) {
         double exitPrice = trade.lastPrice > 0 ? trade.lastPrice : trade.fill.getAveragePrice();
         trade.engine.forceExit(trade.context, exitPrice);
+        stopFeed(trade);
         log.info("Force exit: orderId={} instrument={} price={}",
                 trade.fill.getOrderId(), trade.fill.getInstrumentKey(), exitPrice);
         notifier.send(String.format("%s: force-exited at %.2f (orderId=%s)%n%s",
@@ -640,7 +707,9 @@ public class TradeMonitor implements TelegramCommandListener {
         volatile double lastPrice;
         volatile boolean breakevenReported;
         volatile boolean stopBreachReported;
+        volatile boolean feedFailureReported;
         volatile MonitorMode mode = MonitorMode.MANAGED;
+        volatile MarketDataFeed feed;
 
         ActiveTrade(TradeFillEvent fill, TradeContext context, ExitEngine engine,
                     ProfitMilestoneTracker tracker, TradeCost cost) {

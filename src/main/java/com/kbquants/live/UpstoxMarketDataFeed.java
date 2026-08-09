@@ -10,6 +10,7 @@ import com.upstox.feeder.constants.Mode;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.Objects;
 import java.util.Set;
 
@@ -31,7 +32,8 @@ public class UpstoxMarketDataFeed implements MarketDataFeed {
 
     private final UpstoxDataCredentials credentials;
     private final Set<String> instrumentKeys;
-    private MarketDataStreamerV3 streamer;
+    private volatile MarketDataStreamerV3 streamer;
+    private volatile Consumer<String> onFailure;
 
     public UpstoxMarketDataFeed(UpstoxDataCredentials credentials, Set<String> instrumentKeys) {
         this.credentials = Objects.requireNonNull(credentials, "credentials must not be null");
@@ -52,17 +54,54 @@ public class UpstoxMarketDataFeed implements MarketDataFeed {
 
         streamer = new MarketDataStreamerV3(apiClient, instrumentKeys, Mode.LTPC);
         streamer.setOnMarketUpdateListener(update -> dispatchUpdate(update, listener));
-        streamer.setOnErrorListener(error -> log.error("Upstox market data stream error", error));
-        streamer.setOnCloseListener((code, reason) -> log.warn("Upstox market data stream closed: {} {}", code, reason));
+
+        // Reported, not just logged. Without prices the exit engine stops
+        // ratcheting and stops triggering -- the position is unprotected
+        // while everything still looks fine from the outside.
+        streamer.setOnErrorListener(error -> {
+            log.error("Upstox market data stream error", error);
+            reportFailure("stream error: " + (error == null ? "unknown" : error.getMessage()));
+        });
+        streamer.setOnCloseListener((code, reason) -> {
+            log.warn("Upstox market data stream closed: {} {}", code, reason);
+            reportFailure(String.format("stream closed (%s %s)", code, reason));
+        });
+
         streamer.autoReconnect(true);
 
         log.info("Connecting to Upstox market data stream for {} instrument(s)", instrumentKeys.size());
         streamer.connect();
     }
 
+    @Override
     public void stop() {
-        if (streamer != null) {
-            streamer.disconnect();
+        MarketDataStreamerV3 current = streamer;
+        streamer = null;
+        if (current != null) {
+            log.info("Closing Upstox market data stream for {}", instrumentKeys);
+            try {
+                current.disconnect();
+            } catch (Exception e) {
+                // A close that fails is not worth propagating -- the trade
+                // is already finished with; just do not leak the failure.
+                log.warn("Error closing Upstox market data stream: {}", e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public void setFailureListener(Consumer<String> onFailure) {
+        this.onFailure = onFailure;
+    }
+
+    /**
+     * Suppressed once {@link #stop()} has run: a disconnect we asked for is
+     * not a failure, and reporting it would cry wolf on every closed trade.
+     */
+    private void reportFailure(String reason) {
+        Consumer<String> listener = onFailure;
+        if (listener != null && streamer != null) {
+            listener.accept(reason);
         }
     }
 
