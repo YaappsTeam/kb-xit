@@ -54,4 +54,11 @@ public interface TelegramCommandListener {
 
     /** List what the bot accepts. */
     void onHelpRequested();
+
+    /**
+     * A recognised command with the wrong arguments. Answered for the same
+     * reason unknown commands are: failing silently leaves the user
+     * expecting a trade to be tracked when nothing was.
+     */
+    void onMalformedCommand(String command, String usage);
 }

@@ -266,6 +266,11 @@ public class TradeMonitor implements TelegramCommandListener {
     }
 
     @Override
+    public void onMalformedCommand(String command, String usage) {
+        notifier.send(command + " needs arguments — usage: " + usage);
+    }
+
+    @Override
     public void onAdoptionPaused(boolean paused) {
 
         adoptingNewTrades = !paused;

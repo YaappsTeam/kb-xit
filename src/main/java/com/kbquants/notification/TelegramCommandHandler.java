@@ -215,10 +215,20 @@ public class TelegramCommandHandler {
      */
     private static void dispatchTrack(String[] parts, String rawText, TelegramCommandListener listener) {
         if (parts.length < 2) {
-            log.warn("Malformed {} command (expected /track <symbol> [price] [qty]): {}", parts[0], rawText);
+            reportMalformed(parts[0], "/track <symbol> [price] [qty]", rawText, listener);
             return;
         }
         listener.onTrack(List.of(Arrays.copyOfRange(parts, 1, parts.length)));
+    }
+
+    /**
+     * Logged and answered. The log alone is not enough: it is on the
+     * server, and the person who mistyped is looking at Telegram.
+     */
+    private static void reportMalformed(String command, String usage, String rawText,
+                                        TelegramCommandListener listener) {
+        log.warn("Malformed {} command (expected {}): {}", command, usage, rawText);
+        listener.onMalformedCommand(command, usage);
     }
 
     /**
@@ -265,8 +275,7 @@ public class TelegramCommandHandler {
     private static void dispatchMode(String[] parts, String rawText, MonitorMode mode,
                                      TelegramCommandListener listener) {
         if (parts.length != 2) {
-            log.warn("Malformed {} command (expected {} <orderId> or {} all): {}",
-                    parts[0], parts[0], parts[0], rawText);
+            reportMalformed(parts[0], parts[0] + " <orderId> or " + parts[0] + " all", rawText, listener);
             return;
         }
         listener.onMonitorModeRequested(parts[1], mode);
@@ -289,7 +298,7 @@ public class TelegramCommandHandler {
 
     private static void dispatchExit(String[] parts, String rawText, TelegramCommandListener listener) {
         if (parts.length != 2) {
-            log.warn("Malformed /exit command (expected /exit <orderId> or /exit all): {}", rawText);
+            reportMalformed("/exit", "/exit <orderId> or /exit all", rawText, listener);
             return;
         }
         if (parts[1].equalsIgnoreCase("all")) {

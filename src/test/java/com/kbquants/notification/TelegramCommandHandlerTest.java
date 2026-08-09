@@ -72,6 +72,11 @@ class TelegramCommandHandlerTest {
         public void onHelpRequested() {
             events.add("help");
         }
+
+        @Override
+        public void onMalformedCommand(String command, String usage) {
+            events.add("malformed:" + command + ":" + usage);
+        }
     }
 
     @Test
@@ -110,14 +115,19 @@ class TelegramCommandHandlerTest {
         assertEquals(List.of("track:NIFTY50"), listener.events);
     }
 
+    /**
+     * A recognised command with no arguments must answer. Logging alone
+     * puts the message on the server while the person who mistyped is
+     * looking at Telegram, expecting a trade to be tracked.
+     */
     @Test
-    void shouldIgnoreTrackCommandWithNoArguments() {
+    void shouldReportTrackCommandWithNoArguments() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/track", listener);
 
-        assertTrue(listener.events.isEmpty());
+        assertEquals(List.of("malformed:/track:/track <symbol> [price] [qty]"), listener.events);
     }
 
     /**
@@ -156,13 +166,13 @@ class TelegramCommandHandlerTest {
     }
 
     @Test
-    void shouldIgnoreMalformedExitCommand() {
+    void shouldReportMalformedExitCommand() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/exit", listener);
 
-        assertTrue(listener.events.isEmpty());
+        assertEquals(List.of("malformed:/exit:/exit <orderId> or /exit all"), listener.events);
     }
 
     @Test
@@ -253,13 +263,29 @@ class TelegramCommandHandlerTest {
     }
 
     @Test
-    void shouldIgnoreMonitorModeCommandWithoutATarget() {
+    void shouldReportMonitorModeCommandWithoutATarget() {
 
         RecordingListener listener = new RecordingListener();
 
         TelegramCommandHandler.dispatch("/release", listener);
 
-        assertTrue(listener.events.isEmpty());
+        assertEquals(List.of("malformed:/release:/release <orderId> or /release all"), listener.events);
+    }
+
+    /**
+     * Every command that can be malformed must answer -- silence is the
+     * failure mode this exists to remove.
+     */
+    @Test
+    void everyArgumentTakingCommandShouldAnswerWhenBare() {
+
+        for (String command : List.of("/track", "/exit", "/release", "/observe", "/manage")) {
+            RecordingListener listener = new RecordingListener();
+            TelegramCommandHandler.dispatch(command, listener);
+            assertEquals(1, listener.events.size(), () -> command + " stayed silent");
+            assertTrue(listener.events.get(0).startsWith("malformed:" + command),
+                    () -> command + " gave " + listener.events.get(0));
+        }
     }
 
     @Test
