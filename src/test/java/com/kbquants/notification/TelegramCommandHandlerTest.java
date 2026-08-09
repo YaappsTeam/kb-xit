@@ -77,6 +77,16 @@ class TelegramCommandHandlerTest {
         public void onMalformedCommand(String command, String usage) {
             events.add("malformed:" + command + ":" + usage);
         }
+
+        @Override
+        public void onRiskShow() {
+            events.add("riskShow");
+        }
+
+        @Override
+        public void onRiskSet(double maxRiskPerTrade) {
+            events.add("riskSet:" + maxRiskPerTrade);
+        }
     }
 
     @Test
@@ -317,10 +327,86 @@ class TelegramCommandHandlerTest {
     void helpTextShouldMentionEveryAcceptedCommand() {
 
         for (String command : List.of("/track", "/exit", "/status", "/ladder", "/refresh",
-                "/pause", "/resume", "/release", "/observe", "/manage")) {
+                "/pause", "/resume", "/release", "/observe", "/manage", "/risk", "/help")) {
             assertTrue(TelegramCommandHandler.HELP_TEXT.contains(command),
                     () -> command + " missing from help text");
         }
+    }
+
+    @Test
+    void bareRiskShouldReportTheCurrentSetting() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/risk", listener);
+
+        assertEquals(List.of("riskShow"), listener.events);
+    }
+
+    @Test
+    void riskWithAnAmountShouldSetIt() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/risk 5000", listener);
+
+        assertEquals(List.of("riskSet:5000.0"), listener.events);
+    }
+
+    @Test
+    void riskOffShouldRemoveTheCeiling() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/risk OFF", listener);
+
+        assertEquals(List.of("riskSet:0.0"), listener.events);
+    }
+
+    /**
+     * A mistyped figure here silently changes how much every subsequent
+     * trade can lose, so it is rejected rather than guessed at.
+     */
+    @Test
+    void riskShouldRejectNonNumericAndNonPositiveAmounts() {
+
+        for (String bad : List.of("/risk abc", "/risk 0", "/risk -100", "/risk 1 2")) {
+            RecordingListener listener = new RecordingListener();
+            TelegramCommandHandler.dispatch(bad, listener);
+            assertEquals(1, listener.events.size(), () -> bad + " gave " + listener.events);
+            assertTrue(listener.events.get(0).startsWith("malformed:/risk"),
+                    () -> bad + " gave " + listener.events.get(0));
+        }
+    }
+
+    /**
+     * /ladder previously had two lines where an optional argument covers
+     * both, which read as a duplicate. /track is the deliberate exception:
+     * its three lines are three genuinely different argument shapes, not
+     * the same thing said twice.
+     */
+    @Test
+    void helpTextShouldNotRepeatACommandThatNeedsOnlyOneLine() {
+
+        for (String command : List.of("/ladder", "/exit", "/status", "/refresh",
+                "/pause", "/resume", "/release", "/observe", "/manage", "/risk", "/help")) {
+            // "/pause, /resume" legitimately share a line, so a trailing
+            // comma counts as a mention just like a trailing space.
+            long occurrences = TelegramCommandHandler.HELP_TEXT.lines()
+                    .filter(line -> line.contains(command + " ") || line.contains(command + ","))
+                    .count();
+            assertEquals(1, occurrences, () -> command + " appears " + occurrences + " times in help");
+        }
+    }
+
+    @Test
+    void helpTextShouldShowEachTrackForm() {
+
+        long trackForms = TelegramCommandHandler.HELP_TEXT.lines()
+                .filter(line -> line.startsWith("/track "))
+                .count();
+
+        assertEquals(3, trackForms, "expected the bare, quantity and fully explicit forms");
     }
 
     @Test

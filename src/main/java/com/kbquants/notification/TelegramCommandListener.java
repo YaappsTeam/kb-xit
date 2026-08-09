@@ -61,4 +61,13 @@ public interface TelegramCommandListener {
      * expecting a trade to be tracked when nothing was.
      */
     void onMalformedCommand(String command, String usage);
+
+    /** Report the current per-trade risk ceiling. */
+    void onRiskShow();
+
+    /**
+     * Change the rupee loss a trade may take at its hard stop, applying to
+     * trades opened afterwards. Zero removes the ceiling.
+     */
+    void onRiskSet(double maxRiskPerTrade);
 }

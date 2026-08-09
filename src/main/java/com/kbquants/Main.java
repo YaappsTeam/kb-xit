@@ -9,6 +9,7 @@ import com.kbquants.live.UpstoxDataCredentials;
 import com.kbquants.live.UpstoxMarketDataFeed;
 import com.kbquants.domain.ActiveLadder;
 import com.kbquants.domain.MilestoneLadder;
+import com.kbquants.domain.RiskSettings;
 import com.kbquants.live.UpstoxChargesService;
 import com.kbquants.live.UpstoxQuoteService;
 import com.kbquants.session.ChargesService;
@@ -85,10 +86,13 @@ public class Main {
         // milestone sets moves the hard stop for both at once.
         ActiveLadder activeLadder = new ActiveLadder(MilestoneLadder.defaultLadder());
 
+        // Seeded from the environment, then adjustable at runtime via /risk.
+        RiskSettings riskSettings = new RiskSettings(maxRiskFromEnv());
+
         if (liveData) {
             UpstoxDataCredentials dataCredentials = UpstoxDataCredentials.fromEnv();
             feedFactory = liveFeedFactory(dataCredentials);
-            trackRequestResolver = instrumentAwareResolver(dataCredentials, activeLadder);
+            trackRequestResolver = instrumentAwareResolver(dataCredentials, activeLadder, riskSettings);
             chargesService = new UpstoxChargesService(dataCredentials);
         } else {
             feedFactory = Main::simulatedFeed;
@@ -97,7 +101,7 @@ public class Main {
         }
 
         TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
-                trackRequestResolver, activeLadder, chargesService);
+                trackRequestResolver, activeLadder, chargesService, riskSettings);
 
         TelegramCommandHandler commandHandler = new TelegramCommandHandler(credentials, tradeMonitor);
         commandHandler.start();
@@ -125,7 +129,8 @@ public class Main {
      * {@code /track <symbol>} sizes against.
      */
     private static TrackRequestResolver instrumentAwareResolver(UpstoxDataCredentials dataCredentials,
-                                                              ActiveLadder activeLadder) throws IOException {
+                                                              ActiveLadder activeLadder,
+                                                              RiskSettings riskSettings) throws IOException {
 
         String capital = System.getenv("CAPITAL_PER_TRADE");
         if (capital == null || capital.isBlank()) {
@@ -133,21 +138,28 @@ public class Main {
                     "Missing required environment variable: CAPITAL_PER_TRADE (used to size a bare /track <symbol>)");
         }
 
-        // Optional second ceiling. Where both apply the smaller wins, so
-        // capital caps exposure and risk caps the loss -- a wide stop on a
-        // small position rather than a narrow stop that noise would trip.
-        String maxRisk = System.getenv("MAX_RISK_PER_TRADE");
-        double maxRiskPerTrade = maxRisk == null || maxRisk.isBlank() ? 0 : Double.parseDouble(maxRisk);
-        if (maxRiskPerTrade <= 0) {
-            log.warn("MAX_RISK_PER_TRADE is not set — position size is capped by capital alone, so a hard-stop "
-                    + "loss is CAPITAL_PER_TRADE x the set's hard stop ({}% on OPTIONS).",
-                    (int) (MilestoneLadder.optionsLadder().getHardStopPercent() * 100));
-        }
-
         return new InstrumentAwareTrackRequestResolver(
                 InstrumentCatalog.loadFrom(new InstrumentMasterLoader()),
                 new UpstoxQuoteService(dataCredentials),
-                new PositionSizer(Double.parseDouble(capital), maxRiskPerTrade, activeLadder));
+                new PositionSizer(Double.parseDouble(capital), riskSettings, activeLadder));
+    }
+
+    /**
+     * Optional second ceiling. Where both apply the smaller wins, so capital
+     * caps exposure and risk caps the loss -- a wide stop on a small
+     * position rather than a narrow stop that ordinary noise would trip.
+     */
+    private static double maxRiskFromEnv() {
+
+        String maxRisk = System.getenv("MAX_RISK_PER_TRADE");
+        double value = maxRisk == null || maxRisk.isBlank() ? 0 : Double.parseDouble(maxRisk);
+
+        if (value <= 0) {
+            log.warn("MAX_RISK_PER_TRADE is not set — position size is capped by capital alone, so a hard-stop "
+                    + "loss is CAPITAL_PER_TRADE x the set's hard stop ({}% on OPTIONS). Set one with /risk.",
+                    (int) (MilestoneLadder.optionsLadder().getHardStopPercent() * 100));
+        }
+        return value;
     }
 
     private static MarketDataFeed simulatedFeed(TradeFillEvent fill) {
