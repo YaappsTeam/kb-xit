@@ -6,6 +6,7 @@ import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.MilestoneSets;
 import com.kbquants.domain.MonitorMode;
 import com.kbquants.domain.OwnershipMode;
+import com.kbquants.domain.Phase;
 import com.kbquants.domain.RiskSettings;
 import com.kbquants.domain.TradeContext;
 import com.kbquants.engine.ExitEngine;
@@ -21,6 +22,9 @@ import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.TradeCost;
 import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.TradeFillEvent;
+import com.kbquants.session.TradeSnapshot;
+import com.kbquants.session.TradeStore;
+import com.kbquants.session.NoOpTradeStore;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.LinkedHashMap;
@@ -84,6 +88,9 @@ public class TradeMonitor implements TelegramCommandListener {
     /** Shared with position sizing, so /risk applies to the next trade. */
     private final RiskSettings riskSettings;
 
+    /** Where open trades are kept so a restart does not lose them. */
+    private final TradeStore tradeStore;
+
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                         Notifier notifier, TrackRequestResolver trackRequestResolver) {
         this(orderFillFeed, feedFactory, notifier, trackRequestResolver, MilestoneLadder.defaultLadder(),
@@ -108,6 +115,13 @@ public class TradeMonitor implements TelegramCommandListener {
                 new RiskSettings(0));
     }
 
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, new NoOpTradeStore());
+    }
+
     /**
      * Takes the ActiveLadder rather than a ladder so that position sizing,
      * which needs the same hard stop, cannot drift out of step when the
@@ -115,13 +129,15 @@ public class TradeMonitor implements TelegramCommandListener {
      */
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                          Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
-                         ChargesService chargesService, RiskSettings riskSettings) {
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore) {
+        this.tradeStore = Objects.requireNonNull(tradeStore, "tradeStore must not be null");
         this.riskSettings = Objects.requireNonNull(riskSettings, "riskSettings must not be null");
         this.chargesService = Objects.requireNonNull(chargesService, "chargesService must not be null");
         this.feedFactory = Objects.requireNonNull(feedFactory, "feedFactory must not be null");
         this.notifier = Objects.requireNonNull(notifier, "notifier must not be null");
         this.trackRequestResolver = Objects.requireNonNull(trackRequestResolver, "trackRequestResolver must not be null");
         this.activeLadder = Objects.requireNonNull(activeLadder, "activeLadder must not be null");
+        restore();
         Objects.requireNonNull(orderFillFeed, "orderFillFeed must not be null").start(this::onFill);
     }
 
@@ -156,7 +172,7 @@ public class TradeMonitor implements TelegramCommandListener {
                 fill.getFilledQuantity(), ExitModel.MODERATE, OwnershipMode.MILESTONE);
 
         ActiveTrade trade = new ActiveTrade(fill, context, new ExitEngine(context, ladderForTrade),
-                new ProfitMilestoneTracker(breakeven, ladderForTrade), cost);
+                new ProfitMilestoneTracker(breakeven, ladderForTrade), cost, ladderForTrade);
 
         if (activeTrades.putIfAbsent(fill.getOrderId(), trade) != null) {
             log.debug("Ignoring duplicate fill event for orderId={}", fill.getOrderId());
@@ -167,7 +183,120 @@ public class TradeMonitor implements TelegramCommandListener {
                 fill.getOrderId(), fill.getInstrumentKey(), fill.getAveragePrice(), breakeven, cost);
         notifier.send(buildTrackingMessage(fill, cost, breakeven, ladderForTrade));
 
+        persist();
         startFeed(trade);
+    }
+
+    /**
+     * Writes the open trades out. Called after anything that changes what
+     * would need restoring -- a new trade, a moved stop, a phase change, a
+     * mode change, a close -- rather than on every tick, since most ticks
+     * change nothing worth keeping.
+     */
+    private void persist() {
+        tradeStore.save(openTrades().map(TradeMonitor::toSnapshot).toList());
+    }
+
+    static TradeSnapshot toSnapshot(ActiveTrade trade) {
+
+        TradeSnapshot snapshot = new TradeSnapshot();
+        snapshot.setOrderId(trade.fill.getOrderId());
+        snapshot.setInstrumentKey(trade.fill.getInstrumentKey());
+        snapshot.setDisplaySymbol(trade.fill.getDisplaySymbol());
+        snapshot.setEntryPrice(trade.fill.getAveragePrice());
+        snapshot.setQuantity(trade.fill.getFilledQuantity());
+        snapshot.setTickSize(trade.fill.getTickSize());
+
+        snapshot.setBasePrice(trade.context.getBasePrice());
+        snapshot.setPhase(trade.context.getCurrentPhase().name());
+        snapshot.setCurrentStopLoss(trade.context.getCurrentStopLoss());
+        snapshot.setLadderName(trade.ladder.getName());
+        snapshot.setLastPrice(trade.lastPrice);
+        snapshot.setMonitorMode(trade.mode.name());
+
+        snapshot.setNextMilestoneIndex(trade.tracker.getNextThresholdIndex());
+        snapshot.setBreakevenReported(trade.breakevenReported);
+
+        snapshot.setBuyCharges(trade.cost.getBuyCharges());
+        snapshot.setSellCharges(trade.cost.getSellCharges());
+        snapshot.setCostEstimated(trade.cost.isEstimated());
+
+        return snapshot;
+    }
+
+    /**
+     * Rebuilds trades from a previous run and starts watching them again.
+     * <p>
+     * The ratcheted stop is restored as-is rather than recomputed: it may
+     * have been tightened well above the hard stop over the life of the
+     * trade, and recomputing would silently give that protection back.
+     * <p>
+     * The user is told what was resumed, because this system cannot know
+     * whether the position is still open at the broker -- it may have been
+     * closed by hand while the process was down.
+     */
+    private void restore() {
+
+        List<TradeSnapshot> saved = tradeStore.load();
+        if (saved.isEmpty()) {
+            return;
+        }
+
+        StringBuilder summary = new StringBuilder("Resumed " + saved.size() + " trade(s) from before the restart:");
+
+        for (TradeSnapshot snapshot : saved) {
+            try {
+                ActiveTrade trade = fromSnapshot(snapshot);
+                activeTrades.put(trade.fill.getOrderId(), trade);
+                if (trade.mode != MonitorMode.RELEASED) {
+                    startFeed(trade);
+                }
+                summary.append(String.format("%n  %s entry %.2f, breakeven %.2f, stop %.2f, %s [%s]",
+                        trade.fill.getDisplaySymbol(), trade.fill.getAveragePrice(), trade.context.getBasePrice(),
+                        trade.context.getCurrentStopLoss(), trade.context.getCurrentPhase(), trade.mode));
+            } catch (Exception e) {
+                log.error("Could not resume trade {}: {}", snapshot.getOrderId(), e.getMessage());
+                summary.append(String.format("%n  %s could NOT be resumed (%s) — manage it yourself",
+                        snapshot.getDisplaySymbol(), e.getMessage()));
+            }
+        }
+
+        summary.append(System.lineSeparator())
+               .append("Check these are still open at your broker — positions closed while this was down are not known here.");
+
+        log.info("Resumed {} trade(s) from {}", saved.size(), tradeStore.getClass().getSimpleName());
+        notifier.send(summary.toString());
+    }
+
+    private ActiveTrade fromSnapshot(TradeSnapshot snapshot) {
+
+        MilestoneLadder ladder = MilestoneSets.byName(snapshot.getLadderName())
+                .orElseGet(() -> {
+                    log.warn("Unknown milestone set {} in saved trade {} -- falling back to the active set",
+                            snapshot.getLadderName(), snapshot.getOrderId());
+                    return activeLadder.get();
+                });
+
+        TradeFillEvent fill = new TradeFillEvent(snapshot.getOrderId(), snapshot.getInstrumentKey(),
+                snapshot.getEntryPrice(), snapshot.getQuantity(), snapshot.getTickSize(),
+                snapshot.getDisplaySymbol());
+
+        TradeContext context = new TradeContext(snapshot.getOrderId(), snapshot.getEntryPrice(),
+                snapshot.getBasePrice(), snapshot.getQuantity(), ExitModel.MODERATE, OwnershipMode.MILESTONE);
+        context.setCurrentPhase(Phase.valueOf(snapshot.getPhase()));
+        context.setCurrentStopLoss(snapshot.getCurrentStopLoss());
+
+        TradeCost cost = new TradeCost(snapshot.getBuyCharges(), snapshot.getSellCharges(),
+                snapshot.getEntryPrice() * snapshot.getQuantity(), snapshot.isCostEstimated());
+
+        ActiveTrade trade = new ActiveTrade(fill, context, new ExitEngine(context, ladder),
+                new ProfitMilestoneTracker(snapshot.getBasePrice(), ladder, snapshot.getNextMilestoneIndex()),
+                cost, ladder);
+
+        trade.lastPrice = snapshot.getLastPrice() > 0 ? snapshot.getLastPrice() : snapshot.getEntryPrice();
+        trade.breakevenReported = snapshot.isBreakevenReported();
+        trade.mode = MonitorMode.valueOf(snapshot.getMonitorMode());
+        return trade;
     }
 
     /**
@@ -230,7 +359,17 @@ public class TradeMonitor implements TelegramCommandListener {
         }
 
         trade.lastPrice = currentPrice;
+
+        // Most ticks change nothing worth keeping, so the write is driven
+        // by the stop ratcheting or the phase advancing rather than by
+        // every price that arrives.
+        double stopBefore = trade.context.getCurrentStopLoss();
+        Phase phaseBefore = trade.context.getCurrentPhase();
+
         trade.engine.onPriceUpdate(currentPrice, trade.context);
+
+        boolean materialChange = trade.context.getCurrentStopLoss() != stopBefore
+                || trade.context.getCurrentPhase() != phaseBefore;
 
         if (!trade.context.isClosed() && trade.context.getCurrentStopLoss() > 0
                 && currentPrice <= trade.context.getCurrentStopLoss()) {
@@ -258,6 +397,7 @@ public class TradeMonitor implements TelegramCommandListener {
                     trade.fill.getOrderId(), trade.fill.getInstrumentKey(), currentPrice, stopLoss);
             notifier.send(String.format("%s: stop-loss hit at %.2f (sl=%.2f) — trade closed%n%s",
                     trade.fill.getInstrumentKey(), currentPrice, stopLoss, settlement(trade, currentPrice)));
+            persist();
             return;
         }
 
@@ -265,8 +405,10 @@ public class TradeMonitor implements TelegramCommandListener {
         // net profit by definition, and the ladder only carries positive
         // thresholds. It is the first thing worth telling the user --
         // from here on, anything gained is theirs.
+        boolean breakevenJustReported = false;
         if (!trade.breakevenReported && currentPrice >= trade.context.getBasePrice()) {
             trade.breakevenReported = true;
+            breakevenJustReported = true;
             notifier.send(String.format("%s: breakeven — costs of %.2f covered at %.2f",
                     trade.fill.getInstrumentKey(), trade.cost.getTotalCharges(), currentPrice));
         }
@@ -274,6 +416,10 @@ public class TradeMonitor implements TelegramCommandListener {
         OptionalDouble crossed = trade.tracker.checkAndAdvance(currentPrice);
         if (crossed.isPresent()) {
             notifier.send(formatMilestoneMessage(trade.fill, currentPrice, crossed.getAsDouble(), trade));
+        }
+
+        if (materialChange || crossed.isPresent() || breakevenJustReported) {
+            persist();
         }
     }
 
@@ -483,6 +629,7 @@ public class TradeMonitor implements TelegramCommandListener {
             log.info("Monitor mode for orderId={} set to {} (was {})", trade.fill.getOrderId(), mode, previous);
             notifier.send(describeModeChange(trade, mode));
         }
+        persist();
     }
 
     /**
@@ -589,6 +736,7 @@ public class TradeMonitor implements TelegramCommandListener {
                 trade.fill.getOrderId(), trade.fill.getInstrumentKey(), exitPrice);
         notifier.send(String.format("%s: force-exited at %.2f (orderId=%s)%n%s",
                 trade.fill.getInstrumentKey(), exitPrice, trade.fill.getOrderId(), settlement(trade, exitPrice)));
+        persist();
     }
 
     /**
@@ -704,6 +852,7 @@ public class TradeMonitor implements TelegramCommandListener {
         final ExitEngine engine;
         final ProfitMilestoneTracker tracker;
         final TradeCost cost;
+        final MilestoneLadder ladder;
         volatile double lastPrice;
         volatile boolean breakevenReported;
         volatile boolean stopBreachReported;
@@ -712,12 +861,13 @@ public class TradeMonitor implements TelegramCommandListener {
         volatile MarketDataFeed feed;
 
         ActiveTrade(TradeFillEvent fill, TradeContext context, ExitEngine engine,
-                    ProfitMilestoneTracker tracker, TradeCost cost) {
+                    ProfitMilestoneTracker tracker, TradeCost cost, MilestoneLadder ladder) {
             this.fill = fill;
             this.context = context;
             this.engine = engine;
             this.tracker = tracker;
             this.cost = cost;
+            this.ladder = ladder;
             this.lastPrice = fill.getAveragePrice();
         }
     }

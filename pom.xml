@@ -22,8 +22,8 @@
        rather than silently dropped, 0.13.0 runtime /risk plus replies to
        malformed commands, 0.14.0 per-trade buttons for exit and
        monitoring-mode commands, 0.15.0 price-feed lifecycle and failure
-       alerts. -->
-  <version>0.15.0-SNAPSHOT</version>
+       alerts, 0.16.0 open trades persisted across restarts. -->
+  <version>0.16.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

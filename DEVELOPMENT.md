@@ -209,14 +209,14 @@ Unchanged from the previous milestone.
 - **Order slicing is not implemented** — quantity is capped at the exchange freeze limit (27 lots for NIFTY) rather than split across orders, because multiple fills at different prices do not fit the single-entry-price model.
 - **Instrument master is refreshed weekly, not daily** — contracts listed since the last Wednesday will not resolve until `/refresh`.
 - **No real exit order placement** — `TradeMonitor` force-exits (marks the trade closed, sets SL to current price) but never places, modifies, or cancels a real broker order. Real limit/GTT exit orders are Phase 3.
-- **Position reconciliation on startup** — not implemented. If the process restarts, in-flight trades from a real broker are not automatically resumed (paper-trading trades are inherently ephemeral, so this doesn't apply there).
+- **Position reconciliation against the broker** — open trades now survive a restart via `JsonTradeStore`, but nothing checks them against the broker's actual positions. A trade closed by hand while the process was down is resumed regardless; the user is warned to check. Real reconciliation needs the order/position APIs, so it is Phase 3.
 - **The Upstox live feeds are untested against real network/servers** — see §5.1. Same for Telegram's `getUpdates`/`sendMessage` calls — see §6.
 - **Runner-level classes lack dedicated unit tests**: `SequentialCombinationExecutor`, `ParallelCombinationExecutor`, `SimulationRequest`, `SimulationResult`, and `SimulationRunner` — unchanged gap.
 
 ## 10. Test suite summary
 
 ```
-277 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+288 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |

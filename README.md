@@ -258,6 +258,20 @@ Selection rules:
 - **You cannot switch while a trade is open.** Open trades keep the set they were opened with, so switching mid-flight would make "active" mean something other than what is managing your position. Exit first, then choose.
 - Numbers live in `MilestoneLadder` — changing them is a code change, deliberately, since they encode trading intent worth reviewing in a diff. Only the *choice* is a runtime decision.
 
+## Surviving a restart
+
+The position doesn't disappear when the process does. Open trades are written to `~/.xit-mc/open-trades.json` (override with `TRADE_STATE_FILE`) whenever something material changes — a new trade, the stop ratcheting, a phase advancing, a milestone crossing, a mode change, a close — and restored on the next start.
+
+What's restored matters more than that it is:
+
+- **The ratcheted stop, as-is.** It may have been tightened far above the hard stop over the life of the trade; recomputing it would silently hand that protection back.
+- **The milestone index**, so thresholds already reported don't all fire again on the first tick back.
+- Phase, cost-inclusive breakeven, monitoring mode, and the milestone set the trade was opened with.
+
+The file is written to a temp file and moved into place, so a crash mid-write can't leave something unparseable. A corrupt or missing file means starting with no trades rather than refusing to start — with nothing watching the positions, failing to start is the worse outcome.
+
+On resume you get a summary and a warning: **this system can't know whether the position is still open at your broker.** If you closed it by hand while the process was down, it will be resumed here regardless — check, and `/release` anything that's gone.
+
 ## Taking back control
 
 This app **never places a buy order**. It's purely an exit engine: every position it manages was bought elsewhere and handed to it by `/track`. So it has to be possible to hand one back.

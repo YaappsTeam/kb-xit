@@ -14,6 +14,8 @@ import com.kbquants.live.UpstoxChargesService;
 import com.kbquants.live.UpstoxQuoteService;
 import com.kbquants.session.ChargesService;
 import com.kbquants.session.EstimatedChargesService;
+import com.kbquants.session.JsonTradeStore;
+import com.kbquants.session.TradeStore;
 import com.kbquants.notification.TelegramCommandHandler;
 import com.kbquants.notification.TelegramCredentials;
 import com.kbquants.notification.TelegramNotifier;
@@ -100,8 +102,14 @@ public class Main {
             chargesService = new EstimatedChargesService();
         }
 
+        // Open trades are written to disk and restored on the next start.
+        // The position does not disappear when the process does, so losing
+        // the entry, breakeven, phase and ratcheted stop would leave it
+        // open at the broker with nothing watching it.
+        TradeStore tradeStore = new JsonTradeStore();
+
         TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
-                trackRequestResolver, activeLadder, chargesService, riskSettings);
+                trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore);
 
         TelegramCommandHandler commandHandler = new TelegramCommandHandler(credentials, tradeMonitor);
         commandHandler.start();
