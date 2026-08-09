@@ -9,6 +9,7 @@ import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.domain.RiskSettings;
 import com.kbquants.domain.TradeContext;
+import com.kbquants.domain.TradingToken;
 import com.kbquants.engine.ExitEngine;
 import com.kbquants.notification.Notifier;
 import com.kbquants.notification.ProfitMilestoneTracker;
@@ -100,6 +101,12 @@ public class TradeMonitor implements TelegramCommandListener {
     private final ExitOrderPlacer exitOrderPlacer;
 
     /**
+     * The daily order-placement token, supplied at runtime via /token.
+     * Held here because the Telegram control plane is where it arrives.
+     */
+    private final TradingToken tradingToken;
+
+    /**
      * Order ids already taken on, kept after the trade itself is dropped.
      * <p>
      * activeTrades used to double as the duplicate-fill guard, which is why
@@ -160,6 +167,14 @@ public class TradeMonitor implements TelegramCommandListener {
                 riskSettings, tradeStore, new PaperExitOrderPlacer());
     }
 
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, exitOrderPlacer, new TradingToken(java.time.ZoneId.of("Asia/Kolkata")));
+    }
+
     /**
      * Takes the ActiveLadder rather than a ladder so that position sizing,
      * which needs the same hard stop, cannot drift out of step when the
@@ -168,7 +183,8 @@ public class TradeMonitor implements TelegramCommandListener {
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                          Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
                          ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
-                         ExitOrderPlacer exitOrderPlacer) {
+                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken) {
+        this.tradingToken = Objects.requireNonNull(tradingToken, "tradingToken must not be null");
         this.exitOrderPlacer = Objects.requireNonNull(exitOrderPlacer, "exitOrderPlacer must not be null");
         this.tradeStore = Objects.requireNonNull(tradeStore, "tradeStore must not be null");
         this.riskSettings = Objects.requireNonNull(riskSettings, "riskSettings must not be null");
@@ -642,6 +658,28 @@ public class TradeMonitor implements TelegramCommandListener {
     private static String describeForButton(ActiveTrade trade) {
         return String.format("%s  %.2f → %.2f  [%s]",
                 trade.fill.getDisplaySymbol(), trade.fill.getAveragePrice(), trade.lastPrice, trade.mode);
+    }
+
+    @Override
+    public void onTokenStatusRequested() {
+        notifier.send(tradingToken.describe());
+    }
+
+    /**
+     * Deliberately does not echo the token, log it, or confirm any part of
+     * it. The reply says only that one was accepted.
+     */
+    @Override
+    public void onTokenProvided(String token) {
+        try {
+            tradingToken.set(token);
+            log.info("Trading token supplied");
+            notifier.send("Token accepted — " + tradingToken.describe()
+                    + System.lineSeparator()
+                    + "Delete your message if it is still in the chat: it contains a live credential.");
+        } catch (IllegalArgumentException e) {
+            notifier.send("That token looks empty — send /token <value>");
+        }
     }
 
     @Override

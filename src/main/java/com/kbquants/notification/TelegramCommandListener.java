@@ -80,4 +80,13 @@ public interface TelegramCommandListener {
 
     /** Offer the open trades as buttons for the given monitoring mode. */
     void onMonitorModeChoicesRequested(com.kbquants.domain.MonitorMode mode);
+
+    /** Report whether a usable trading token is held, without revealing it. */
+    void onTokenStatusRequested();
+
+    /**
+     * Supply the daily trading token. The value is a live credential, so
+     * implementations must not log or echo it.
+     */
+    void onTokenProvided(String token);
 }

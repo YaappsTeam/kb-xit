@@ -98,6 +98,16 @@ class TelegramCommandHandlerTest {
         public void onMonitorModeChoicesRequested(com.kbquants.domain.MonitorMode mode) {
             events.add("modeChoices:" + mode);
         }
+
+        @Override
+        public void onTokenStatusRequested() {
+            events.add("tokenStatus");
+        }
+
+        @Override
+        public void onTokenProvided(String token) {
+            events.add("tokenProvided:" + token);
+        }
     }
 
     @Test
@@ -369,7 +379,7 @@ class TelegramCommandHandlerTest {
     void helpTextShouldMentionEveryAcceptedCommand() {
 
         for (String command : List.of("/track", "/exit", "/status", "/ladder", "/refresh",
-                "/pause", "/resume", "/release", "/observe", "/manage", "/risk", "/help")) {
+                "/pause", "/resume", "/release", "/observe", "/manage", "/risk", "/help", "/token")) {
             assertTrue(TelegramCommandHandler.HELP_TEXT.contains(command),
                     () -> command + " missing from help text");
         }
@@ -449,6 +459,42 @@ class TelegramCommandHandlerTest {
                 .count();
 
         assertEquals(3, trackForms, "expected the bare, quantity and fully explicit forms");
+    }
+
+    @Test
+    void bareTokenShouldReportStatus() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/token", listener);
+
+        assertEquals(List.of("tokenStatus"), listener.events);
+    }
+
+    @Test
+    void tokenWithAValueShouldSupplyIt() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/token abc123", listener);
+
+        assertEquals(List.of("tokenProvided:abc123"), listener.events);
+    }
+
+    /**
+     * A token pasted into chat stays in the history on both devices and on
+     * Telegram's servers, so the message is deleted. Recognising which
+     * messages carry a credential is the part worth testing.
+     */
+    @Test
+    void shouldRecogniseMessagesCarryingACredential() {
+
+        assertTrue(TelegramCommandHandler.carriesASecret("/token abc123"));
+        assertTrue(TelegramCommandHandler.carriesASecret("  /TOKEN abc123  "));
+
+        assertFalse(TelegramCommandHandler.carriesASecret("/token"));
+        assertFalse(TelegramCommandHandler.carriesASecret("/status"));
+        assertFalse(TelegramCommandHandler.carriesASecret(null));
     }
 
     @Test
