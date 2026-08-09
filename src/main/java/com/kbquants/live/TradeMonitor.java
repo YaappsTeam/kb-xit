@@ -6,6 +6,7 @@ import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.MilestoneSets;
 import com.kbquants.domain.MonitorMode;
 import com.kbquants.domain.OwnershipMode;
+import com.kbquants.domain.RiskSettings;
 import com.kbquants.domain.TradeContext;
 import com.kbquants.engine.ExitEngine;
 import com.kbquants.notification.Notifier;
@@ -80,6 +81,9 @@ public class TradeMonitor implements TelegramCommandListener {
      */
     private volatile boolean adoptingNewTrades = true;
 
+    /** Shared with position sizing, so /risk applies to the next trade. */
+    private final RiskSettings riskSettings;
+
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                         Notifier notifier, TrackRequestResolver trackRequestResolver) {
         this(orderFillFeed, feedFactory, notifier, trackRequestResolver, MilestoneLadder.defaultLadder(),
@@ -97,6 +101,13 @@ public class TradeMonitor implements TelegramCommandListener {
         this(orderFillFeed, feedFactory, notifier, trackRequestResolver, new ActiveLadder(ladder), chargesService);
     }
 
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                new RiskSettings(0));
+    }
+
     /**
      * Takes the ActiveLadder rather than a ladder so that position sizing,
      * which needs the same hard stop, cannot drift out of step when the
@@ -104,7 +115,8 @@ public class TradeMonitor implements TelegramCommandListener {
      */
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                          Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
-                         ChargesService chargesService) {
+                         ChargesService chargesService, RiskSettings riskSettings) {
+        this.riskSettings = Objects.requireNonNull(riskSettings, "riskSettings must not be null");
         this.chargesService = Objects.requireNonNull(chargesService, "chargesService must not be null");
         this.feedFactory = Objects.requireNonNull(feedFactory, "feedFactory must not be null");
         this.notifier = Objects.requireNonNull(notifier, "notifier must not be null");
@@ -263,6 +275,42 @@ public class TradeMonitor implements TelegramCommandListener {
     @Override
     public void onHelpRequested() {
         notifier.send(TelegramCommandHandler.HELP_TEXT);
+    }
+
+    @Override
+    public void onMalformedCommand(String command, String usage) {
+        notifier.send(command + " needs arguments — usage: " + usage);
+    }
+
+    @Override
+    public void onRiskShow() {
+        notifier.send(describeRisk());
+    }
+
+    @Override
+    public void onRiskSet(double maxRiskPerTrade) {
+        riskSettings.set(maxRiskPerTrade);
+        log.info("Max risk per trade set to {}", maxRiskPerTrade);
+        notifier.send("Updated — " + describeRisk() + " (applies to trades opened from now)");
+    }
+
+    /**
+     * Spells out the consequence rather than just the number: with no
+     * ceiling, size is capped by capital alone and a stopped-out trade
+     * costs capital x the set's hard stop, which is easy to underestimate.
+     */
+    private String describeRisk() {
+
+        if (!riskSettings.isEnabled()) {
+            return String.format(
+                    "no risk ceiling — position size is capped by capital alone, so a stop-out costs "
+                            + "CAPITAL_PER_TRADE x %.0f%% on the %s set. Set one with /risk <amount>.",
+                    activeLadder.get().getHardStopPercent() * 100, activeLadder.get().getName());
+        }
+
+        return String.format("max risk per trade %.0f, sized against the %s set's %.0f%% hard stop",
+                riskSettings.getMaxRiskPerTrade(), activeLadder.get().getName(),
+                activeLadder.get().getHardStopPercent() * 100);
     }
 
     @Override

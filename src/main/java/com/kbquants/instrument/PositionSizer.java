@@ -1,6 +1,7 @@
 package com.kbquants.instrument;
 
 import com.kbquants.domain.ActiveLadder;
+import com.kbquants.domain.RiskSettings;
 import lombok.Getter;
 
 /**
@@ -21,28 +22,37 @@ import lombok.Getter;
 public final class PositionSizer {
 
     private final double capitalPerTrade;
-    private final double maxRiskPerTrade;
+    private final RiskSettings riskSettings;
     private final ActiveLadder activeLadder;
 
     public PositionSizer(double capitalPerTrade) {
-        this(capitalPerTrade, 0, null);
+        this(capitalPerTrade, new RiskSettings(0), null);
+    }
+
+    public PositionSizer(double capitalPerTrade, double maxRiskPerTrade, ActiveLadder activeLadder) {
+        this(capitalPerTrade, new RiskSettings(maxRiskPerTrade), activeLadder);
     }
 
     /**
-     * @param maxRiskPerTrade rupees to lose if the hard stop is hit, or 0 to
-     *                        size on capital alone
-     * @param activeLadder    supplies the hard stop the risk is measured
-     *                        against; it moves with the selected set
+     * @param riskSettings rupees to lose if the hard stop is hit, or 0 to
+     *                     size on capital alone. Read per call rather than
+     *                     copied, so a change from Telegram applies to the
+     *                     next trade.
+     * @param activeLadder supplies the hard stop the risk is measured
+     *                     against; it moves with the selected set
      */
-    public PositionSizer(double capitalPerTrade, double maxRiskPerTrade, ActiveLadder activeLadder) {
+    public PositionSizer(double capitalPerTrade, RiskSettings riskSettings, ActiveLadder activeLadder) {
         if (capitalPerTrade <= 0) {
             throw new IllegalArgumentException("capitalPerTrade must be positive: " + capitalPerTrade);
         }
-        if (maxRiskPerTrade > 0 && activeLadder == null) {
-            throw new IllegalArgumentException("maxRiskPerTrade needs an activeLadder to read the hard stop from");
+        if (riskSettings == null) {
+            throw new IllegalArgumentException("riskSettings must not be null");
+        }
+        if (riskSettings.isEnabled() && activeLadder == null) {
+            throw new IllegalArgumentException("a risk ceiling needs an activeLadder to read the hard stop from");
         }
         this.capitalPerTrade = capitalPerTrade;
-        this.maxRiskPerTrade = maxRiskPerTrade;
+        this.riskSettings = riskSettings;
         this.activeLadder = activeLadder;
     }
 
@@ -71,15 +81,15 @@ public final class PositionSizer {
         int lots = lotsFromCapital;
         boolean limitedByRisk = false;
 
-        if (maxRiskPerTrade > 0) {
+        if (riskSettings.isEnabled()) {
             double riskPerLot = contractCost * activeLadder.get().getHardStopPercent();
-            int lotsFromRisk = (int) Math.floor(maxRiskPerTrade / riskPerLot);
+            int lotsFromRisk = (int) Math.floor(riskSettings.getMaxRiskPerTrade() / riskPerLot);
 
             if (lotsFromRisk < 1) {
                 return Result.rejected(String.format(
                         "one lot of %s risks %.2f at the %.0f%% hard stop, above max risk per trade %.2f",
                         instrument.getTradingSymbol(), riskPerLot,
-                        activeLadder.get().getHardStopPercent() * 100, maxRiskPerTrade));
+                        activeLadder.get().getHardStopPercent() * 100, riskSettings.getMaxRiskPerTrade()));
             }
             if (lotsFromRisk < lots) {
                 lots = lotsFromRisk;
@@ -94,7 +104,7 @@ public final class PositionSizer {
             limitedByRisk = false;
         }
 
-        double riskAtStop = maxRiskPerTrade > 0
+        double riskAtStop = riskSettings.isEnabled()
                 ? lots * contractCost * activeLadder.get().getHardStopPercent()
                 : 0;
 

@@ -211,7 +211,7 @@ lots = min( capital / lotCost , maxRisk / (lotCost × hardStop%) )   then capped
 | ₹10,000 | 6 | ₹21,567 | ₹8,627 |
 | ₹5,000 | 3 | ₹10,784 | ₹4,313 |
 
-The hard stop comes from the **active milestone set**, so switching sets re-sizes accordingly.
+The hard stop comes from the **active milestone set**, so switching sets re-sizes accordingly. `MAX_RISK_PER_TRADE` seeds the value at startup; `/risk <amount>` changes it mid-session without a restart, and `/risk` alone reports what's in force.
 
 ### Expiry day and cheap premiums
 
@@ -290,6 +290,7 @@ This app **never places a buy order**. It's purely an exit engine: every positio
    manage - Hand a trade back to the engine
    pause - Stop taking on new trades
    resume - Resume taking on new trades
+   risk - Rupees a trade may lose at its stop: /risk <amount> or /risk off
    ladder - Choose the active milestone set
    refresh - Re-fetch the instrument master now
    help - Show every command
@@ -313,7 +314,9 @@ This app **never places a buy order**. It's purely an exit engine: every positio
 | `/manage <orderId>` / `all` | Return a trade to full management |
 | `/ladder` | Show the milestone sets as buttons and pick one |
 | `/ladder <name>` | Select a set directly, skipping the buttons |
-| `/help` | List every command. `/start` shows the same |
+| `/risk` | Show the current per-trade risk ceiling |
+| `/risk <amount>` / `/risk off` | Set or remove it, applying to trades opened afterwards |
+| `/help` | Show every command. `/start` shows the same |
 
 Anything else starting with `/` gets an "unknown command" reply pointing at `/help`. That's deliberate: a mistyped command that silently did nothing would leave you believing a position was being watched when it wasn't. Ordinary chat is ignored, so the bot only answers command-shaped input.
 

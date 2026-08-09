@@ -53,8 +53,7 @@ public class TelegramCommandHandler {
             "Symbols ignore case and spaces, e.g. nifty25000ce18aug26",
             "",
             "CLOSE A POSITION",
-            "/exit <orderId> — sell now",
-            "/exit all — sell everything open",
+            "/exit <orderId>|all — sell now, one trade or everything open",
             "",
             "STEP BACK WITHOUT SELLING",
             "/observe <orderId>|all — keep the alerts, no automatic exit",
@@ -64,9 +63,10 @@ public class TelegramCommandHandler {
             "",
             "SETTINGS",
             "/status — open trades: entry, breakeven, phase, stop, mode",
-            "/ladder — choose the milestone set (buttons)",
-            "/ladder <name> — choose it directly",
+            "/ladder [name] — choose the milestone set; bare shows buttons",
+            "/risk [amount|off] — rupees a trade may lose at its stop; bare shows the current setting",
             "/refresh — re-fetch the instrument master now",
+            "/help — this message",
             "",
             "Every percentage reported is net of brokerage and taxes.");
 
@@ -197,6 +197,7 @@ public class TelegramCommandHandler {
             case "/status" -> listener.onStatusRequested();
             case "/refresh" -> listener.onRefreshInstruments();
             case "/ladder" -> dispatchLadder(parts, listener);
+            case "/risk" -> dispatchRisk(parts, text, listener);
             case "/pause" -> listener.onAdoptionPaused(true);
             case "/resume" -> listener.onAdoptionPaused(false);
             case "/release" -> dispatchMode(parts, rawText(text), MonitorMode.RELEASED, listener);
@@ -215,10 +216,20 @@ public class TelegramCommandHandler {
      */
     private static void dispatchTrack(String[] parts, String rawText, TelegramCommandListener listener) {
         if (parts.length < 2) {
-            log.warn("Malformed {} command (expected /track <symbol> [price] [qty]): {}", parts[0], rawText);
+            reportMalformed(parts[0], "/track <symbol> [price] [qty]", rawText, listener);
             return;
         }
         listener.onTrack(List.of(Arrays.copyOfRange(parts, 1, parts.length)));
+    }
+
+    /**
+     * Logged and answered. The log alone is not enough: it is on the
+     * server, and the person who mistyped is looking at Telegram.
+     */
+    private static void reportMalformed(String command, String usage, String rawText,
+                                        TelegramCommandListener listener) {
+        log.warn("Malformed {} command (expected {}): {}", command, usage, rawText);
+        listener.onMalformedCommand(command, usage);
     }
 
     /**
@@ -265,11 +276,42 @@ public class TelegramCommandHandler {
     private static void dispatchMode(String[] parts, String rawText, MonitorMode mode,
                                      TelegramCommandListener listener) {
         if (parts.length != 2) {
-            log.warn("Malformed {} command (expected {} <orderId> or {} all): {}",
-                    parts[0], parts[0], parts[0], rawText);
+            reportMalformed(parts[0], parts[0] + " <orderId> or " + parts[0] + " all", rawText, listener);
             return;
         }
         listener.onMonitorModeRequested(parts[1], mode);
+    }
+
+    /**
+     * Bare "/risk" reports the current ceiling; "/risk 5000" sets it and
+     * "/risk off" removes it. Rejecting anything else rather than guessing:
+     * a mistyped figure here silently changes how much every subsequent
+     * trade can lose.
+     */
+    private static void dispatchRisk(String[] parts, String rawText, TelegramCommandListener listener) {
+
+        if (parts.length == 1) {
+            listener.onRiskShow();
+            return;
+        }
+        if (parts.length != 2) {
+            reportMalformed("/risk", "/risk <amount> or /risk off", rawText, listener);
+            return;
+        }
+        if ("off".equalsIgnoreCase(parts[1])) {
+            listener.onRiskSet(0);
+            return;
+        }
+        try {
+            double amount = Double.parseDouble(parts[1]);
+            if (amount <= 0) {
+                reportMalformed("/risk", "/risk <positive amount> or /risk off", rawText, listener);
+                return;
+            }
+            listener.onRiskSet(amount);
+        } catch (NumberFormatException e) {
+            reportMalformed("/risk", "/risk <amount> or /risk off", rawText, listener);
+        }
     }
 
     /**
@@ -289,7 +331,7 @@ public class TelegramCommandHandler {
 
     private static void dispatchExit(String[] parts, String rawText, TelegramCommandListener listener) {
         if (parts.length != 2) {
-            log.warn("Malformed /exit command (expected /exit <orderId> or /exit all): {}", rawText);
+            reportMalformed("/exit", "/exit <orderId> or /exit all", rawText, listener);
             return;
         }
         if (parts[1].equalsIgnoreCase("all")) {
