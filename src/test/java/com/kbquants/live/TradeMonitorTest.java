@@ -298,4 +298,86 @@ class TradeMonitorTest {
         assertEquals(1, notifier.messages.size());
         assertTrue(notifier.messages.get(0).contains("No active trades"));
     }
+
+    /**
+     * A finished trade is dropped, so acting on it afterwards reports that
+     * it is gone rather than force-exiting it a second time. Previously
+     * closed trades stayed in the map for the life of the process and
+     * /exit would happily "force-exit" one again.
+     */
+    @Test
+    void shouldReportAnAlreadyClosedTradeAsGone() {
+
+        RecordingNotifier notifier = new RecordingNotifier();
+        FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
+        FakeFeed feed = new FakeFeed();
+
+        TradeMonitor monitor = new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
+        orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
+        monitor.onExit("order-1");
+        notifier.messages.clear();
+
+        monitor.onExit("order-1");
+
+        assertTrue(notifier.messages.get(0).contains("No active trade found"),
+                () -> notifier.messages.toString());
+    }
+
+    @Test
+    void closedTradesShouldNotAppearInStatus() {
+
+        RecordingNotifier notifier = new RecordingNotifier();
+        FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
+        FakeFeed feed = new FakeFeed();
+
+        TradeMonitor monitor = new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
+        orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
+        monitor.onExit("order-1");
+        notifier.messages.clear();
+
+        monitor.onStatusRequested();
+
+        assertEquals("No active trades", notifier.messages.get(0));
+    }
+
+    /**
+     * Dropping the trade must not drop the duplicate-fill guard with it:
+     * a replayed fill for a settled order must not re-open it.
+     */
+    @Test
+    void shouldStillIgnoreAReplayedFillAfterTheTradeHasClosed() {
+
+        RecordingNotifier notifier = new RecordingNotifier();
+        FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
+        FakeFeed feed = new FakeFeed();
+
+        TradeMonitor monitor = new TradeMonitor(orderFillFeed, fill -> feed, notifier, RESOLVER);
+        orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
+        monitor.onExit("order-1");
+        notifier.messages.clear();
+
+        orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "NSE_EQ|INE848E01016", 100.0, 10));
+
+        assertTrue(notifier.messages.isEmpty(), () -> "re-opened a settled trade: " + notifier.messages);
+        monitor.onStatusRequested();
+        assertEquals("No active trades", notifier.messages.get(0));
+    }
+
+    @Test
+    void exitAllShouldClearEveryTrade() {
+
+        RecordingNotifier notifier = new RecordingNotifier();
+        FakeOrderFillFeed orderFillFeed = new FakeOrderFillFeed();
+
+        TradeMonitor monitor = new TradeMonitor(orderFillFeed,
+                fill -> new FakeFeed(), notifier, RESOLVER);
+        orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-1", "A", 100.0, 10));
+        orderFillFeed.capturedListener.onFill(new TradeFillEvent("order-2", "B", 200.0, 10));
+        monitor.onExitAll();
+        notifier.messages.clear();
+
+        monitor.onStatusRequested();
+
+        assertEquals("No active trades", notifier.messages.get(0));
+    }
 }

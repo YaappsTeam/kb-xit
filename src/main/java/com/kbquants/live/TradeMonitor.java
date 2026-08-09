@@ -27,7 +27,9 @@ import com.kbquants.session.TradeStore;
 import com.kbquants.session.NoOpTradeStore;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -90,6 +92,29 @@ public class TradeMonitor implements TelegramCommandListener {
 
     /** Where open trades are kept so a restart does not lose them. */
     private final TradeStore tradeStore;
+
+    /**
+     * Order ids already taken on, kept after the trade itself is dropped.
+     * <p>
+     * activeTrades used to double as the duplicate-fill guard, which is why
+     * closed trades were never removed from it -- and why it grew for the
+     * life of the process, holding an engine, a tracker and a cost record
+     * per trade ever taken. Ids alone are cheap, so the guard survives
+     * while the trade does not.
+     * <p>
+     * Bounded: a long-running process should not accumulate ids forever
+     * either, and a fill replayed thousands of trades later is not a
+     * duplicate worth guarding against.
+     */
+    private final Set<String> handledOrderIds = Collections.newSetFromMap(
+            Collections.synchronizedMap(new LinkedHashMap<>() {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > MAX_REMEMBERED_ORDER_IDS;
+                }
+            }));
+
+    private static final int MAX_REMEMBERED_ORDER_IDS = 5_000;
 
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                         Notifier notifier, TrackRequestResolver trackRequestResolver) {
@@ -174,10 +199,11 @@ public class TradeMonitor implements TelegramCommandListener {
         ActiveTrade trade = new ActiveTrade(fill, context, new ExitEngine(context, ladderForTrade),
                 new ProfitMilestoneTracker(breakeven, ladderForTrade), cost, ladderForTrade);
 
-        if (activeTrades.putIfAbsent(fill.getOrderId(), trade) != null) {
+        if (!handledOrderIds.add(fill.getOrderId())) {
             log.debug("Ignoring duplicate fill event for orderId={}", fill.getOrderId());
             return;
         }
+        activeTrades.put(fill.getOrderId(), trade);
 
         log.info("Tracking new trade: orderId={} instrument={} entryPrice={} breakeven={} cost={}",
                 fill.getOrderId(), fill.getInstrumentKey(), fill.getAveragePrice(), breakeven, cost);
@@ -397,6 +423,7 @@ public class TradeMonitor implements TelegramCommandListener {
                     trade.fill.getOrderId(), trade.fill.getInstrumentKey(), currentPrice, stopLoss);
             notifier.send(String.format("%s: stop-loss hit at %.2f (sl=%.2f) — trade closed%n%s",
                     trade.fill.getInstrumentKey(), currentPrice, stopLoss, settlement(trade, currentPrice)));
+            discard(trade);
             persist();
             return;
         }
@@ -736,7 +763,25 @@ public class TradeMonitor implements TelegramCommandListener {
                 trade.fill.getOrderId(), trade.fill.getInstrumentKey(), exitPrice);
         notifier.send(String.format("%s: force-exited at %.2f (orderId=%s)%n%s",
                 trade.fill.getInstrumentKey(), exitPrice, trade.fill.getOrderId(), settlement(trade, exitPrice)));
+        discard(trade);
         persist();
+    }
+
+    /**
+     * Drops a finished trade, once its outcome has been reported.
+     * <p>
+     * Everything the trade held -- engine, milestone tracker, cost record,
+     * feed -- goes with it. Previously closed trades stayed in the map for
+     * the life of the process, so every /status, button build and /exit all
+     * walked the whole session's history.
+     * <p>
+     * The order id is deliberately kept, in handledOrderIds, so a replayed
+     * fill cannot re-open a trade that has already been settled.
+     */
+    private void discard(ActiveTrade trade) {
+        activeTrades.remove(trade.fill.getOrderId());
+        log.debug("Dropped finished trade orderId={}; {} still open",
+                trade.fill.getOrderId(), activeTrades.size());
     }
 
     /**
