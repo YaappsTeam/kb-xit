@@ -204,7 +204,7 @@ Unchanged from the previous milestone.
 - **Sell-side charges are quoted at the entry price** at fill time, since the exit price is unknown. Drift is ~₹0.31 near breakeven and ~₹89 at a +100% exit; the settled figure reported at exit corrects it.
 - **Order slicing is not implemented** — quantity is capped at the exchange freeze limit (27 lots for NIFTY) rather than split across orders, because multiple fills at different prices do not fit the single-entry-price model.
 - **Instrument master is refreshed weekly, not daily** — contracts listed since the last Wednesday will not resolve until `/refresh`.
-- **No real exit order placement** — `TradeMonitor` force-exits (marks the trade closed, sets SL to current price) but never places, modifies, or cancels a real broker order. Real limit/GTT exit orders are Phase 3.
+- **No real exit order placement.** The seam exists — every exit path goes through `ExitOrderPlacer`, and a rejected order leaves the trade open and managed rather than reported as closed — but the only implementation is `PaperExitOrderPlacer`, which places nothing. `UpstoxExitOrderPlacer` is Phase 3 and is blocked on operational prerequisites, not code: a registered **static IP** (order placement is restricted, and a home connection's IP changes), API key/secret/redirect, and a way to obtain the **daily** access token, which expires at 3:30 AM behind an interactive 2FA login.
 - **Position reconciliation against the broker** — open trades now survive a restart via `JsonTradeStore`, but nothing checks them against the broker's actual positions. A trade closed by hand while the process was down is resumed regardless; the user is warned to check. Real reconciliation needs the order/position APIs, so it is Phase 3.
 - **The Upstox live feeds are untested against real network/servers** — see §5.1. Same for Telegram's `getUpdates`/`sendMessage` calls — see §6.
 - **Runner-level classes lack dedicated unit tests**: `SequentialCombinationExecutor`, `ParallelCombinationExecutor`, `SimulationRequest`, `SimulationResult`, and `SimulationRunner` — unchanged gap.
@@ -212,7 +212,7 @@ Unchanged from the previous milestone.
 ## 10. Test suite summary
 
 ```
-307 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+317 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |

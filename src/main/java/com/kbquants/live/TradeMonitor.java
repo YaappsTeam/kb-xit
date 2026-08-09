@@ -21,6 +21,9 @@ import com.kbquants.session.EstimatedChargesService;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.TradeCost;
 import com.kbquants.session.OrderFillFeed;
+import com.kbquants.session.ExitOrderPlacer;
+import com.kbquants.session.ExitReason;
+import com.kbquants.session.PaperExitOrderPlacer;
 import com.kbquants.session.TradeFillEvent;
 import com.kbquants.session.TradeSnapshot;
 import com.kbquants.session.TradeStore;
@@ -93,6 +96,9 @@ public class TradeMonitor implements TelegramCommandListener {
     /** Where open trades are kept so a restart does not lose them. */
     private final TradeStore tradeStore;
 
+    /** Places the sell order that actually closes a position. */
+    private final ExitOrderPlacer exitOrderPlacer;
+
     /**
      * Order ids already taken on, kept after the trade itself is dropped.
      * <p>
@@ -147,6 +153,13 @@ public class TradeMonitor implements TelegramCommandListener {
                 riskSettings, new NoOpTradeStore());
     }
 
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, new PaperExitOrderPlacer());
+    }
+
     /**
      * Takes the ActiveLadder rather than a ladder so that position sizing,
      * which needs the same hard stop, cannot drift out of step when the
@@ -154,7 +167,9 @@ public class TradeMonitor implements TelegramCommandListener {
      */
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                          Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
-                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore) {
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer) {
+        this.exitOrderPlacer = Objects.requireNonNull(exitOrderPlacer, "exitOrderPlacer must not be null");
         this.tradeStore = Objects.requireNonNull(tradeStore, "tradeStore must not be null");
         this.riskSettings = Objects.requireNonNull(riskSettings, "riskSettings must not be null");
         this.chargesService = Objects.requireNonNull(chargesService, "chargesService must not be null");
@@ -417,8 +432,9 @@ public class TradeMonitor implements TelegramCommandListener {
                 return;
             }
 
-            trade.engine.forceExit(trade.context, currentPrice);
-            stopFeed(trade);
+            if (!closePosition(trade, currentPrice, ExitReason.STOP_LOSS)) {
+                return;
+            }
             log.info("Stop-loss hit: orderId={} instrument={} price={} stopLoss={}",
                     trade.fill.getOrderId(), trade.fill.getInstrumentKey(), currentPrice, stopLoss);
             notifier.send(String.format("%s: stop-loss hit at %.2f (sl=%.2f) — trade closed%n%s",
@@ -544,8 +560,10 @@ public class TradeMonitor implements TelegramCommandListener {
 
             double exitPrice = trade.lastPrice > 0 ? trade.lastPrice : trade.fill.getAveragePrice();
             trade.context.setCurrentPhase(Phase.PHASE_4);
-            trade.engine.forceExit(trade.context, exitPrice);
-            stopFeed(trade);
+
+            if (!closePosition(trade, exitPrice, ExitReason.END_OF_DAY)) {
+                continue;
+            }
 
             log.info("End-of-day exit: orderId={} instrument={} price={}",
                     trade.fill.getOrderId(), trade.fill.getInstrumentKey(), exitPrice);
@@ -806,14 +824,48 @@ public class TradeMonitor implements TelegramCommandListener {
 
     private void forceExit(ActiveTrade trade) {
         double exitPrice = trade.lastPrice > 0 ? trade.lastPrice : trade.fill.getAveragePrice();
-        trade.engine.forceExit(trade.context, exitPrice);
-        stopFeed(trade);
+
+        if (!closePosition(trade, exitPrice, ExitReason.MANUAL)) {
+            return;
+        }
+
         log.info("Force exit: orderId={} instrument={} price={}",
                 trade.fill.getOrderId(), trade.fill.getInstrumentKey(), exitPrice);
         notifier.send(String.format("%s: force-exited at %.2f (orderId=%s)%n%s",
                 trade.fill.getInstrumentKey(), exitPrice, trade.fill.getOrderId(), settlement(trade, exitPrice)));
         discard(trade);
         persist();
+    }
+
+    /**
+     * Attempts the sell, and only treats the trade as closed if it
+     * succeeded.
+     * <p>
+     * A rejected order means the position is still open at the broker.
+     * Marking it closed would stop the engine managing a live position on
+     * the strength of an order that never happened -- the stop would no
+     * longer be enforced, and the user would believe they were flat. So a
+     * failure is reported loudly and the trade stays under management.
+     *
+     * @return true if the position is now closed
+     */
+    private boolean closePosition(ActiveTrade trade, double exitPrice, ExitReason reason) {
+
+        ExitOrderPlacer.Result result = exitOrderPlacer.placeExit(trade.fill, exitPrice, reason);
+
+        if (!result.isSuccessful()) {
+            log.error("Exit order FAILED for orderId={} ({}): {}",
+                    trade.fill.getOrderId(), reason, result.getDetail());
+            notifier.send(String.format(
+                    "⚠ %s: exit order FAILED (%s) — %s. The position is still open and still being managed; "
+                            + "close it yourself if this keeps failing.",
+                    trade.fill.getDisplaySymbol(), reason, result.getDetail()));
+            return false;
+        }
+
+        trade.engine.forceExit(trade.context, exitPrice);
+        stopFeed(trade);
+        return true;
     }
 
     /**

@@ -15,7 +15,9 @@ import com.kbquants.live.UpstoxChargesService;
 import com.kbquants.live.UpstoxQuoteService;
 import com.kbquants.session.ChargesService;
 import com.kbquants.session.EstimatedChargesService;
+import com.kbquants.session.ExitOrderPlacer;
 import com.kbquants.session.JsonTradeStore;
+import com.kbquants.session.PaperExitOrderPlacer;
 import com.kbquants.session.TradeStore;
 import com.kbquants.notification.TelegramCommandHandler;
 import com.kbquants.notification.TelegramCredentials;
@@ -111,8 +113,13 @@ public class Main {
         // open at the broker with nothing watching it.
         TradeStore tradeStore = new JsonTradeStore();
 
+        // TRADING_MODE gates this: only "paper" is wired up, so nothing can
+        // reach a broker. When live order placement lands it swaps in here,
+        // and it is the only object in the system that can sell anything.
+        ExitOrderPlacer exitOrderPlacer = new PaperExitOrderPlacer();
+
         TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
-                trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore);
+                trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore, exitOrderPlacer);
 
         EndOfDaySchedule endOfDay = endOfDaySchedule(tradeMonitor);
         if (endOfDay != null) {
