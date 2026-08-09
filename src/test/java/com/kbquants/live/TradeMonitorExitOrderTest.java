@@ -83,10 +83,14 @@ class TradeMonitorExitOrderTest {
     private static final class RecordingPlacer implements ExitOrderPlacer {
         final List<String> calls = new ArrayList<>();
         boolean fail;
+        boolean uncertain;
 
         @Override
         public Result placeExit(TradeFillEvent fill, double price, ExitReason reason) {
             calls.add(reason + "@" + price + " x" + fill.getFilledQuantity());
+            if (uncertain) {
+                return Result.uncertain("no response from Upstox");
+            }
             return fail ? Result.failed("broker rejected: insufficient margin")
                         : Result.placed("BROKER-1");
         }
@@ -193,6 +197,46 @@ class TradeMonitorExitOrderTest {
 
         assertTrue(f.placer().calls.size() >= 2,
                 "expected another attempt, got " + f.placer().calls.size());
+    }
+
+    /**
+     * An unknown outcome is the dangerous one. The order may be resting at
+     * the exchange, so retrying could sell a position that is already gone
+     * and open a short. The engine stops acting and hands the trade back.
+     */
+    @Test
+    void anUncertainExitShouldStopTheEngineActingAndHandTheTradeBack() {
+
+        Fixture f = fixture();
+        open(f);
+        f.placer().uncertain = true;
+        f.notifier().messages.clear();
+
+        f.monitor().onExit("order-1");
+
+        assertTrue(f.notifier().anyContains("outcome UNKNOWN"));
+        assertTrue(f.notifier().anyContains("Check your broker"));
+
+        f.notifier().messages.clear();
+        f.monitor().onStatusRequested();
+        assertTrue(f.notifier().last().contains("OBSERVED"),
+                () -> "should stop acting automatically: " + f.notifier().last());
+    }
+
+    @Test
+    void anUncertainStopLossShouldNotBeRetried() {
+
+        Fixture f = fixture();
+        open(f);
+        f.placer().uncertain = true;
+
+        f.feed().listener.onPrice(10.0, 1L);
+        int afterFirst = f.placer().calls.size();
+        f.feed().listener.onPrice(9.0, 2L);
+        f.feed().listener.onPrice(8.0, 3L);
+
+        assertEquals(afterFirst, f.placer().calls.size(),
+                "retrying an unknown outcome risks selling twice");
     }
 
     @Test

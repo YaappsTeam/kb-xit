@@ -891,6 +891,23 @@ public class TradeMonitor implements TelegramCommandListener {
 
         ExitOrderPlacer.Result result = exitOrderPlacer.placeExit(trade.fill, exitPrice, reason);
 
+        // Unknown is not the same as rejected. The order may be resting at
+        // the exchange, so retrying could sell a position that is already
+        // gone and open a short. The engine stops acting and hands the
+        // trade back rather than guessing.
+        if (result.isUncertain()) {
+            log.error("Exit order outcome UNKNOWN for orderId={} ({}): {}",
+                    trade.fill.getOrderId(), reason, result.getDetail());
+            trade.mode = MonitorMode.OBSERVED;
+            notifier.send(String.format(
+                    "🛑 %s: exit order outcome UNKNOWN — %s%n"
+                            + "It may or may not have been sold, so nothing further will be placed automatically "
+                            + "and this trade is now OBSERVED. Check your broker, then /manage it back or /release it.",
+                    trade.fill.getDisplaySymbol(), result.getDetail()));
+            persist();
+            return false;
+        }
+
         if (!result.isSuccessful()) {
             log.error("Exit order FAILED for orderId={} ({}): {}",
                     trade.fill.getOrderId(), reason, result.getDetail());

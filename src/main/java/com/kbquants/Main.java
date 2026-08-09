@@ -11,7 +11,9 @@ import com.kbquants.live.UpstoxMarketDataFeed;
 import com.kbquants.domain.ActiveLadder;
 import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.RiskSettings;
+import com.kbquants.domain.TradingToken;
 import com.kbquants.live.UpstoxChargesService;
+import com.kbquants.live.UpstoxExitOrderPlacer;
 import com.kbquants.live.UpstoxQuoteService;
 import com.kbquants.session.ChargesService;
 import com.kbquants.session.EstimatedChargesService;
@@ -113,13 +115,19 @@ public class Main {
         // open at the broker with nothing watching it.
         TradeStore tradeStore = new JsonTradeStore();
 
-        // TRADING_MODE gates this: only "paper" is wired up, so nothing can
-        // reach a broker. When live order placement lands it swaps in here,
-        // and it is the only object in the system that can sell anything.
-        ExitOrderPlacer exitOrderPlacer = new PaperExitOrderPlacer();
+        // Supplied at runtime via /token, because the daily Upstox login is
+        // interactive and cannot be automated.
+        TradingToken tradingToken = new TradingToken(ZoneId.of("Asia/Kolkata"));
+
+        // The only object in the system that can sell anything. Off unless
+        // PLACE_REAL_ORDERS is explicitly enabled -- the difference between
+        // this and the paper placer is real money, so it is never the
+        // default and never implied by another setting.
+        ExitOrderPlacer exitOrderPlacer = exitOrderPlacer(tradingToken);
 
         TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
-                trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore, exitOrderPlacer);
+                trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore, exitOrderPlacer,
+                tradingToken);
 
         EndOfDaySchedule endOfDay = endOfDaySchedule(tradeMonitor);
         if (endOfDay != null) {
@@ -208,6 +216,26 @@ public class Main {
         ZoneId zone = ZoneId.of(System.getenv().getOrDefault("EOD_TIMEZONE", "Asia/Kolkata"));
 
         return new EndOfDaySchedule(cutoff, zone, tradeMonitor::onEndOfDay);
+    }
+
+    /**
+     * Real orders require an explicit opt-in, a usable daily token and a
+     * registered static IP. Only the first is a code concern; the flag
+     * exists so that nothing else -- MARKET_DATA=live in particular -- can
+     * imply permission to sell.
+     */
+    private static ExitOrderPlacer exitOrderPlacer(TradingToken tradingToken) {
+
+        if (!Boolean.parseBoolean(System.getenv().getOrDefault("PLACE_REAL_ORDERS", "false"))) {
+            log.info("PLACE_REAL_ORDERS is off — exits are recorded and reported, no broker order is placed.");
+            return new PaperExitOrderPlacer();
+        }
+
+        String product = System.getenv().getOrDefault("ORDER_PRODUCT", "I");
+        log.warn("PLACE_REAL_ORDERS is ON — exits will place REAL SELL orders (product={}). "
+                + "This needs a /token each day and a registered static IP.", product);
+
+        return new UpstoxExitOrderPlacer(tradingToken, product);
     }
 
     private static MarketDataFeed simulatedFeed(TradeFillEvent fill) {

@@ -285,6 +285,24 @@ Expiry follows Upstox's rule rather than a 24-hour timer: the token expires at t
 
 ⚠ **Order placement also requires a registered static IP** (SEBI's algo-trading rules). A home connection won't do — the address changes, and re-registering is rate-limited to once a week and invalidates your token each time. Until this runs somewhere with a fixed address, order placement will be refused by Upstox with `UDAPI1221` however valid your token is.
 
+## Placing real sell orders
+
+Off unless `PLACE_REAL_ORDERS=true`. Nothing else implies it — not `MARKET_DATA=live`, not a valid token — because the difference is real money.
+
+It also needs a `/token` for the day and a **registered static IP**. Without the IP, Upstox refuses with `UDAPI1221` and the app says so in those terms, since the message it returns doesn't make clear it's a hosting problem rather than a bad token.
+
+Exits are placed as **MARKET** orders. The decision to be out has already been taken by then, and a limit that doesn't fill leaves the position open with the stop already breached. The cost is slippage, which on a thin option can be material.
+
+Three outcomes, and they're treated differently on purpose:
+
+| Outcome | What happens |
+|---|---|
+| **Accepted** | Trade closes, feed stops, settled P&L reported |
+| **Rejected** (4xx) | Position is still open, so the trade stays managed and a stop-loss exit retries next tick |
+| **Unknown** (timeout, 5xx) | Nothing further is placed. The trade switches to `OBSERVED` and you're told to check your broker |
+
+That last row is the important one. A timeout is **not** a rejection — the order may be resting at the exchange. Retrying it could sell a position that's already gone and leave you **short**, turning a finished trade into a new unmanaged one in the opposite direction. So the order id is claimed *before* the request is sent, and a second exit for the same trade is refused outright.
+
 ## Surviving a restart
 
 The position doesn't disappear when the process does. Open trades are written to `~/.xit-mc/open-trades.json` (override with `TRADE_STATE_FILE`) whenever something material changes — a new trade, the stop ratcheting, a phase advancing, a milestone crossing, a mode change, a close — and restored on the next start.
