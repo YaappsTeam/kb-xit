@@ -24,9 +24,9 @@
        monitoring-mode commands, 0.15.0 price-feed lifecycle and failure
        alerts, 0.16.0 open trades persisted across restarts, 0.16.1 all
        phase transitions applied in one tick, 0.16.2 finished trades
-       dropped instead of accumulating, 0.17.0 end-of-day close (PHASE_4).
-       -->
-  <version>0.17.0-SNAPSHOT</version>
+       dropped instead of accumulating, 0.17.0 end-of-day close (PHASE_4),
+       0.17.1 empty config package removed. -->
+  <version>0.17.1-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

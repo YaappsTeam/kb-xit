@@ -18,7 +18,6 @@ As of this update the project runs **paper trades on live Upstox prices**. The T
 ```
 com.kbquants
 ├── Main           ✅  Entry point: paper trading, with simulated or live Upstox market data
-├── config         🟡  Configuration loading (all classes are empty stubs)
 ├── domain         ✅  Core value/state objects (Phase, TradeContext, MilestoneLadder + named sets,
 │                      ActiveLadder, MonitorMode, enums)
 ├── engine         ✅  The exit/stop-loss/ownership rules engine, driven by MilestoneLadder
@@ -196,7 +195,7 @@ Unchanged from the previous milestone.
 
 ## 9. Known gaps / explicitly unfinished areas
 
-- **`com.kbquants.config` package** — still all empty class bodies. All parameters are hardcoded constants or read from `MilestoneLadder.defaultLadder()`.
+- **No configuration file.** Settings come from environment variables (`MARKET_DATA`, `CAPITAL_PER_TRADE`, `MAX_RISK_PER_TRADE`, `EOD_EXIT_TIME`, …) and, for the milestone sets, from code. An empty `com.kbquants.config` package scaffolding a YAML/JSON loader was deleted: it advertised configurability that did not exist, and nothing referenced it.
 - **`ExitModel` (Conservative/Moderate/Aggressive) has no behavioral differentiation** — same as before.
 - **Parallel execution isn't reachable from `SimulationRunner`** — same as before.
 - **`CandleGenerator`** — still an empty stub.
@@ -266,7 +265,7 @@ Run with: `mvn test`. Build a runnable jar with `mvn package`.
 2. **Verify all Upstox/Telegram network paths against real servers** from an unrestricted environment: OAuth token exchange, both Upstox WebSocket feeds, Telegram `getUpdates`/`sendMessage`.
 3. **Real exit order placement** (limit or GTT) in `TradeMonitor.forceExit`/stop-loss-hit path, via a new `ExitOrderPlacer` interface (broker-agnostic, mirroring `OrderFillFeed`/`MarketDataFeed`).
 4. **Position reconciliation on startup** for live mode.
-5. Implement `com.kbquants.config` so `MilestoneLadder` and other parameters are externally configurable (YAML/JSON).
+5. If configuration ever outgrows environment variables, introduce a loader then — deliberately not scaffolded ahead of need. Milestone set *numbers* are intended to stay in code, since they encode trading intent worth reviewing in a diff; only the *choice* of set is a runtime decision.
 6. Give `ExitModel` real behavioral differences.
 7. Wire `ParallelCombinationExecutor` into `SimulationRunner.resolveExecutor()`.
 8. Implement `CandleGenerator` and start consuming `Candle5m`.
