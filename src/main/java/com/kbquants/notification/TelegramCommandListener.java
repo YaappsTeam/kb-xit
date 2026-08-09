@@ -89,4 +89,13 @@ public interface TelegramCommandListener {
      * implementations must not log or echo it.
      */
     void onTokenProvided(String token);
+
+    /** Take on a detected broker position. */
+    void onAdoptRequested(String orderId);
+
+    /** Decline a detected broker position, permanently. */
+    void onIgnoreRequested(String orderId);
+
+    /** List positions detected at the broker but not managed. */
+    void onPendingAdoptionsRequested();
 }

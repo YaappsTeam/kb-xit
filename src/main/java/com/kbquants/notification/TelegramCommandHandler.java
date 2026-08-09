@@ -42,6 +42,10 @@ public class TelegramCommandHandler {
     public static final String OBSERVE_CALLBACK_PREFIX = "observe:";
     public static final String MANAGE_CALLBACK_PREFIX = "manage:";
 
+    /** Prefixes for accepting or declining a position detected at the broker. */
+    public static final String ADOPT_CALLBACK_PREFIX = "adopt:";
+    public static final String IGNORE_CALLBACK_PREFIX = "ignore:";
+
     /**
      * Telegram rejects callback_data beyond 64 bytes. Generated orderIds
      * ("telegram-" plus a UUID) leave comfortable room, but a broker id
@@ -83,6 +87,7 @@ public class TelegramCommandHandler {
             "/risk [amount|off] — rupees a trade may lose at its stop; bare shows the current setting",
             "/refresh — re-fetch the instrument master now",
             "/token [value] — supply the daily order-placement token; bare shows its status",
+            "/adopt [orderId] — take on a position detected at your broker; bare lists them",
             "/help — this message",
             "",
             "Every percentage reported is net of brokerage and taxes.");
@@ -255,6 +260,7 @@ public class TelegramCommandHandler {
             case "/ladder" -> dispatchLadder(parts, listener);
             case "/risk" -> dispatchRisk(parts, text, listener);
             case "/token" -> dispatchToken(parts, listener);
+            case "/adopt" -> dispatchAdopt(parts, listener);
             case "/pause" -> listener.onAdoptionPaused(true);
             case "/resume" -> listener.onAdoptionPaused(false);
             case "/release" -> dispatchMode(parts, rawText(text), MonitorMode.RELEASED, listener);
@@ -409,6 +415,17 @@ public class TelegramCommandHandler {
         }
     }
 
+    /** Bare "/adopt" lists what is waiting; with an id it takes that one on. */
+    private static void dispatchAdopt(String[] parts, TelegramCommandListener listener) {
+        if (parts.length == 1) {
+            listener.onPendingAdoptionsRequested();
+        } else if (parts.length == 2) {
+            listener.onAdoptRequested(parts[1]);
+        } else {
+            listener.onMalformedCommand("/adopt", "/adopt <orderId>");
+        }
+    }
+
     /**
      * A tapped inline-keyboard button arrives as a callback_query rather
      * than a message, carrying the token that was attached to the button.
@@ -425,6 +442,10 @@ public class TelegramCommandHandler {
             listener.onMonitorModeRequested(data.substring(RELEASE_CALLBACK_PREFIX.length()), MonitorMode.RELEASED);
         } else if (data.startsWith(OBSERVE_CALLBACK_PREFIX)) {
             listener.onMonitorModeRequested(data.substring(OBSERVE_CALLBACK_PREFIX.length()), MonitorMode.OBSERVED);
+        } else if (data.startsWith(ADOPT_CALLBACK_PREFIX)) {
+            listener.onAdoptRequested(data.substring(ADOPT_CALLBACK_PREFIX.length()));
+        } else if (data.startsWith(IGNORE_CALLBACK_PREFIX)) {
+            listener.onIgnoreRequested(data.substring(IGNORE_CALLBACK_PREFIX.length()));
         } else if (data.startsWith(MANAGE_CALLBACK_PREFIX)) {
             listener.onMonitorModeRequested(data.substring(MANAGE_CALLBACK_PREFIX.length()), MonitorMode.MANAGED);
         } else {

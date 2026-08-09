@@ -14,6 +14,7 @@ import com.kbquants.domain.RiskSettings;
 import com.kbquants.domain.TradingToken;
 import com.kbquants.live.UpstoxChargesService;
 import com.kbquants.live.UpstoxExitOrderPlacer;
+import com.kbquants.live.UpstoxOrderFillFeed;
 import com.kbquants.live.UpstoxQuoteService;
 import com.kbquants.session.ChargesService;
 import com.kbquants.session.EstimatedChargesService;
@@ -28,6 +29,7 @@ import com.kbquants.session.TrackRequestResolver;
 import com.kbquants.session.LiteralTrackRequestResolver;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.NoOpOrderFillFeed;
+import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.SimulatedMarketDataFeed;
 import com.kbquants.session.TradeFillEvent;
 import lombok.extern.slf4j.Slf4j;
@@ -125,9 +127,24 @@ public class Main {
         // default and never implied by another setting.
         ExitOrderPlacer exitOrderPlacer = exitOrderPlacer(tradingToken);
 
-        TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
+        // The broker's order stream carries fills for the whole account, so
+        // it is only ever paired with explicit adoption -- the two are set
+        // together here so neither can be enabled without the other.
+        boolean watchBrokerFills = Boolean.parseBoolean(
+                System.getenv().getOrDefault("WATCH_BROKER_FILLS", "false"));
+
+        OrderFillFeed orderFillFeed = watchBrokerFills
+                ? new UpstoxOrderFillFeed(tradingToken)
+                : new NoOpOrderFillFeed();
+
+        if (watchBrokerFills) {
+            log.info("WATCH_BROKER_FILLS is on — positions opened at your broker will be offered for adoption. "
+                    + "Nothing is managed until you accept it. Needs a /token before the stream can start.");
+        }
+
+        TradeMonitor tradeMonitor = new TradeMonitor(orderFillFeed, feedFactory, notifier,
                 trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore, exitOrderPlacer,
-                tradingToken);
+                tradingToken, watchBrokerFills);
 
         EndOfDaySchedule endOfDay = endOfDaySchedule(tradeMonitor);
         if (endOfDay != null) {

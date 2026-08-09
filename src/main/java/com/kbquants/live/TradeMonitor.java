@@ -97,6 +97,23 @@ public class TradeMonitor implements TelegramCommandListener {
     /** Where open trades are kept so a restart does not lose them. */
     private final TradeStore tradeStore;
 
+    /**
+     * Whether fills arriving from the feed must be adopted explicitly.
+     * <p>
+     * A broker's order stream carries fills for the <b>whole account</b>:
+     * a trade punched into the mobile app, a leg of a hedge, a position
+     * from another strategy. Managing those uninvited would apply exit
+     * rules never meant for them, so with this on a detected fill is
+     * offered and waits.
+     */
+    private final boolean requireExplicitAdoption;
+
+    /** Detected fills waiting for a yes or no. */
+    private final Map<String, TradeFillEvent> pendingAdoptions = new ConcurrentHashMap<>();
+
+    /** Retained so it can be told when the daily token arrives. */
+    private final OrderFillFeed orderFillFeed;
+
     /** Places the sell order that actually closes a position. */
     private final ExitOrderPlacer exitOrderPlacer;
 
@@ -175,6 +192,14 @@ public class TradeMonitor implements TelegramCommandListener {
                 riskSettings, tradeStore, exitOrderPlacer, new TradingToken(java.time.ZoneId.of("Asia/Kolkata")));
     }
 
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, exitOrderPlacer, tradingToken, false);
+    }
+
     /**
      * Takes the ActiveLadder rather than a ladder so that position sizing,
      * which needs the same hard stop, cannot drift out of step when the
@@ -183,7 +208,9 @@ public class TradeMonitor implements TelegramCommandListener {
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                          Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
                          ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
-                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken) {
+                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken,
+                         boolean requireExplicitAdoption) {
+        this.requireExplicitAdoption = requireExplicitAdoption;
         this.tradingToken = Objects.requireNonNull(tradingToken, "tradingToken must not be null");
         this.exitOrderPlacer = Objects.requireNonNull(exitOrderPlacer, "exitOrderPlacer must not be null");
         this.tradeStore = Objects.requireNonNull(tradeStore, "tradeStore must not be null");
@@ -193,8 +220,115 @@ public class TradeMonitor implements TelegramCommandListener {
         this.notifier = Objects.requireNonNull(notifier, "notifier must not be null");
         this.trackRequestResolver = Objects.requireNonNull(trackRequestResolver, "trackRequestResolver must not be null");
         this.activeLadder = Objects.requireNonNull(activeLadder, "activeLadder must not be null");
+        this.orderFillFeed = Objects.requireNonNull(orderFillFeed, "orderFillFeed must not be null");
         restore();
-        Objects.requireNonNull(orderFillFeed, "orderFillFeed must not be null").start(this::onFill);
+        orderFillFeed.start(this::onDetectedFill);
+    }
+
+    /**
+     * A fill arriving from the feed rather than from /track.
+     * <p>
+     * With explicit adoption on, this only offers: the alternative is
+     * silently managing whatever the account happens to trade, which is
+     * how a hedge leg or somebody else's strategy ends up with this
+     * system's exit rules applied to it.
+     */
+    void onDetectedFill(TradeFillEvent fill) {
+
+        if (!requireExplicitAdoption) {
+            onFill(fill);
+            return;
+        }
+
+        if (activeTrades.containsKey(fill.getOrderId()) || handledOrderIds.contains(fill.getOrderId())) {
+            return;
+        }
+        if (pendingAdoptions.putIfAbsent(fill.getOrderId(), fill) != null) {
+            return;
+        }
+
+        log.info("Detected an unmanaged fill: orderId={} instrument={} qty={}",
+                fill.getOrderId(), fill.getInstrumentKey(), fill.getFilledQuantity());
+
+        LinkedHashMap<String, String> choices = new LinkedHashMap<>();
+        String token = TelegramCommandHandler.ADOPT_CALLBACK_PREFIX + fill.getOrderId();
+        if (TelegramCommandHandler.fitsCallbackData(token)) {
+            choices.put("Manage the exit of this", token);
+            choices.put("Leave it alone", TelegramCommandHandler.IGNORE_CALLBACK_PREFIX + fill.getOrderId());
+        }
+
+        String prompt = String.format(
+                "New position detected at your broker: %s x%d at %.2f (orderId=%s).%n"
+                        + "It is NOT being managed. Adopt it only if you want this system running its exit rules on it.",
+                fill.getDisplaySymbol(), fill.getFilledQuantity(), fill.getAveragePrice(), fill.getOrderId());
+
+        if (choices.isEmpty()) {
+            notifier.send(prompt + System.lineSeparator() + "Send /adopt " + fill.getOrderId() + " to take it on.");
+        } else {
+            notifier.sendChoices(prompt, choices);
+        }
+    }
+
+    @Override
+    public void onAdoptRequested(String orderId) {
+
+        TradeFillEvent fill = pendingAdoptions.get(orderId);
+        if (fill == null) {
+            notifier.send("Nothing pending with orderId=" + orderId
+                    + " — it may have been adopted, ignored, or never detected.");
+            return;
+        }
+
+        // Paused is checked before the offer is consumed. onFill refuses
+        // while paused, and dropping the offer on the way in would lose a
+        // real position with no way to get it back.
+        if (!adoptingNewTrades) {
+            notifier.send(fill.getDisplaySymbol() + ": adoption is paused (/resume, then /adopt "
+                    + orderId + "). Still waiting.");
+            return;
+        }
+
+        pendingAdoptions.remove(orderId);
+        log.info("Adopting detected fill orderId={}", orderId);
+        onFill(fill);
+    }
+
+    @Override
+    public void onIgnoreRequested(String orderId) {
+
+        TradeFillEvent fill = pendingAdoptions.remove(orderId);
+        if (fill == null) {
+            notifier.send("Nothing pending with orderId=" + orderId);
+            return;
+        }
+        // Remembered so the same fill is not offered again on a reconnect.
+        handledOrderIds.add(orderId);
+        log.info("Ignoring detected fill orderId={}", orderId);
+        notifier.send(fill.getDisplaySymbol() + ": left alone — this system will not touch it.");
+    }
+
+    @Override
+    public void onPendingAdoptionsRequested() {
+
+        if (pendingAdoptions.isEmpty()) {
+            notifier.send("No positions waiting to be adopted");
+            return;
+        }
+
+        LinkedHashMap<String, String> choices = new LinkedHashMap<>();
+        for (TradeFillEvent fill : pendingAdoptions.values()) {
+            String token = TelegramCommandHandler.ADOPT_CALLBACK_PREFIX + fill.getOrderId();
+            if (TelegramCommandHandler.fitsCallbackData(token)) {
+                choices.put(String.format("%s x%d at %.2f",
+                        fill.getDisplaySymbol(), fill.getFilledQuantity(), fill.getAveragePrice()), token);
+            }
+        }
+
+        if (choices.isEmpty()) {
+            notifier.send("Positions waiting, but their ids are too long for buttons — use /adopt <orderId>");
+            return;
+        }
+        notifier.sendChoices("Positions detected but not managed:", choices);
     }
 
     void onFill(TradeFillEvent fill) {
@@ -674,6 +808,10 @@ public class TradeMonitor implements TelegramCommandListener {
         try {
             tradingToken.set(token);
             log.info("Trading token supplied");
+
+            // The broker's order stream cannot connect without one, so it
+            // waits at startup and is told here instead.
+            orderFillFeed.onCredentialAvailable();
             notifier.send("Token accepted — " + tradingToken.describe()
                     + System.lineSeparator()
                     + "Delete your message if it is still in the chat: it contains a live credential.");

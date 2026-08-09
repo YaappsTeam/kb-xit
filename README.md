@@ -319,7 +319,7 @@ On resume you get a summary and a warning: **this system can't know whether the 
 
 ## Taking back control
 
-This app **never places a buy order**. It's purely an exit engine: every position it manages was bought elsewhere and handed to it by `/track`. So it has to be possible to hand one back.
+This app **never places a buy order**. It's purely an exit engine: every position it manages was bought elsewhere and handed to it — by `/track`, or by accepting one it spotted at your broker. So it has to be possible to hand one back.
 
 Sent **without a target**, `/exit`, `/release`, `/observe` and `/manage` reply with a button per open trade — labelled with symbol, entry, current price and mode — so you never retype a generated orderId while a position is moving. Tap one, or use the explicit form when you already know the id.
 
@@ -336,7 +336,32 @@ Sent **without a target**, `/exit`, `/release`, `/observe` and `/manage` reply w
 - **`/manage <orderId>`** — hand it back to the engine.
 - **`/pause` / `/resume`** — control whether *new* trades are adopted. Open trades stay managed, and the reply says so; use `/release all` if you want the engine off everything.
 
-`/pause` matters most for Phase 3. Once the broker fill feed is wired in, it streams fills for the **whole account** — a trade punched into the Upstox app, a position from another strategy — and the engine would start managing positions it was never meant to touch. Until adoption is explicitly opt-in, `/pause` is what stands in the way.
+`/pause` matters most with the broker fill feed on: it stops anything new being offered while you deal with what's already open.
+
+## Positions opened at your broker
+
+`WATCH_BROKER_FILLS=true` connects to Upstox's order stream, so a buy punched into the mobile app turns up here without being typed in again. Off by default; it needs a `/token` before the stream can start, and waits quietly until one arrives.
+
+**Detected positions are offered, never taken.** The stream carries fills for the *whole account* — a leg of a hedge, a position from another strategy, a long-term holding — and managing those uninvited would apply exit rules never meant for them, and, with `PLACE_REAL_ORDERS` on, eventually sell them. So a detected fill arrives as a message with two buttons:
+
+```
+New position detected at your broker: ACC x10 at 100.00 (orderId=order-1).
+It is NOT being managed. Adopt it only if you want this system running
+its exit rules on it.
+[ Manage the exit of this ]  [ Leave it alone ]
+```
+
+- **Manage the exit of this** — adopted exactly as if you'd sent `/track`: breakeven, ladder, stop, the lot.
+- **Leave it alone** — not offered again. A reconnect replays fills; something you've already declined shouldn't come back each time.
+
+Neither answer touches the position. Declining doesn't sell it and doesn't stop it existing — it only means this app won't watch it.
+
+| Command | |
+|---|---|
+| `/adopt` | List everything waiting, as buttons |
+| `/adopt <orderId>` | Accept one directly |
+
+While `/pause` is on you're still told about detected positions, but accepting one is refused and the offer stays waiting — so nothing is taken on behind a pause, and nothing is lost either. Offers live in memory only: a restart clears what was waiting, while trades you actually adopted are restored like any other (see *Surviving a restart*).
 
 ## Setting up your Telegram bot
 
@@ -351,6 +376,7 @@ Sent **without a target**, `/exit`, `/release`, `/observe` and `/manage` reply w
    observe - Keep the alerts, stop automatic exits (position stays open)
    release - Stop watching entirely; position stays open
    manage - Hand a trade back to the engine
+   adopt - Take on a position detected at your broker
    pause - Stop taking on new trades
    resume - Resume taking on new trades
    risk - Rupees a trade may lose at its stop: /risk <amount> or /risk off
@@ -381,6 +407,8 @@ Sent **without a target**, `/exit`, `/release`, `/observe` and `/manage` reply w
 | `/ladder <name>` | Select a set directly, skipping the buttons |
 | `/risk` | Show the current per-trade risk ceiling |
 | `/risk <amount>` / `/risk off` | Set or remove it, applying to trades opened afterwards |
+| `/adopt` | Show positions detected at your broker as buttons, and take one on |
+| `/adopt <orderId>` | Accept one directly, skipping the buttons |
 | `/token` | Show whether a usable order token is held (never shows the token) |
 | `/token <value>` | Supply the daily order-placement token |
 | `/help` | Show every command. `/start` shows the same |

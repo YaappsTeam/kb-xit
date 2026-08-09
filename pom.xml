@@ -30,7 +30,7 @@
        fail-safe rejection handling, 0.20.0 /token for the daily
        order-placement credential, 0.21.0 real SELL orders via
        UpstoxExitOrderPlacer, opt-in and guarded against double sells. -->
-  <version>0.21.0-SNAPSHOT</version>
+  <version>0.22.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>
