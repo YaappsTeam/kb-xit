@@ -510,6 +510,55 @@ public class TradeMonitor implements TelegramCommandListener {
         notifier.send(command + " needs arguments — usage: " + usage);
     }
 
+    /**
+     * Closes out at the end-of-day cutoff, so intraday positions are not
+     * left for the broker to square off at whatever price it gets.
+     * <p>
+     * Only MANAGED trades are closed. OBSERVED means the user took the
+     * trigger back, so it is told rather than acted on -- silently selling
+     * a position someone had explicitly taken manual control of would be
+     * the one thing that mode promises not to do. RELEASED is left alone
+     * entirely.
+     */
+    public void onEndOfDay() {
+
+        List<ActiveTrade> open = openTrades().toList();
+        if (open.isEmpty()) {
+            log.info("End-of-day cutoff reached with no open trades");
+            return;
+        }
+
+        for (ActiveTrade trade : open) {
+
+            if (trade.mode == MonitorMode.RELEASED) {
+                continue;
+            }
+
+            if (!trade.mode.isAutoExitAllowed()) {
+                notifier.send(String.format(
+                        "⏰ %s: end-of-day cutoff reached and this trade is only being observed — no exit placed. "
+                                + "Close it yourself or your broker will square it off.",
+                        trade.fill.getDisplaySymbol()));
+                continue;
+            }
+
+            double exitPrice = trade.lastPrice > 0 ? trade.lastPrice : trade.fill.getAveragePrice();
+            trade.context.setCurrentPhase(Phase.PHASE_4);
+            trade.engine.forceExit(trade.context, exitPrice);
+            stopFeed(trade);
+
+            log.info("End-of-day exit: orderId={} instrument={} price={}",
+                    trade.fill.getOrderId(), trade.fill.getInstrumentKey(), exitPrice);
+            notifier.send(String.format("⏰ %s: end-of-day exit at %.2f (orderId=%s)%n%s",
+                    trade.fill.getDisplaySymbol(), exitPrice, trade.fill.getOrderId(),
+                    settlement(trade, exitPrice)));
+
+            discard(trade);
+        }
+
+        persist();
+    }
+
     @Override
     public void onExitChoicesRequested() {
         offerTradeButtons("Sell which trade?", TelegramCommandHandler.EXIT_CALLBACK_PREFIX, "Sell all open");

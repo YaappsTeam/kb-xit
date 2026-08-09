@@ -40,6 +40,13 @@ $env:TELEGRAM_CHAT_ID = "your-telegram-chat-id-here"
 # Newest by write time, not first alphabetically: after a version bump
 # target/ can hold jars from several versions (plus the shade plugin's
 # -shaded copy), and picking alphabetically silently runs a stale build.
+# Close intraday positions at this wall-clock time, before your broker
+# squares them off at whatever price it gets. Unset = no end-of-day
+# close. The zone defaults to the market's (Asia/Kolkata), not the
+# machine's -- a VM on UTC would otherwise fire hours late.
+# $env:EOD_EXIT_TIME = "15:15"
+# $env:EOD_TIMEZONE = "Asia/Kolkata"
+
 $jar = Get-ChildItem target -Filter "xit-mc-*.jar" |
     Where-Object { $_.Name -notlike "original-*" } |
     Sort-Object LastWriteTime -Descending |

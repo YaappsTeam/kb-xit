@@ -201,7 +201,7 @@ Unchanged from the previous milestone.
 - **Parallel execution isn't reachable from `SimulationRunner`** — same as before.
 - **`CandleGenerator`** — still an empty stub.
 - **`hybridEnabled`/`hybridUpdateCount`/`atr`/`ownershipPercentage` fields on `TradeContext`** — still unused hooks.
-- **`PHASE_4` (forced EOD exit)** — still no automatic transition logic; only `ExitEngine.forceExit()` (now reachable live via Telegram `/exit`).
+- **`PHASE_4` (forced EOD exit)** — implemented via `EndOfDaySchedule`, opt-in through `EOD_EXIT_TIME`. Closes `MANAGED` trades at a wall-clock time in the market's zone; `OBSERVED` trades are warned about rather than sold, `RELEASED` ignored.
 - **The order side is not wired into `Main`** — live *market data* is (`MARKET_DATA=live`), but `UpstoxOrderFillFeed` is still unused there, so trades only ever arrive via `/track`. Wiring it is Phase 3. When it happens, note that it streams fills for the **whole account**: adoption becomes opt-out, and `/pause` (or an explicit adopt step) is what prevents unrelated positions being managed.
 - **The app never places buy orders** — it is purely an exit engine, placing sell orders for positions bought elsewhere. `/track` declares an existing position rather than ordering anything; the name is a legacy misnomer.
 - **Ladder numbers are unvalidated** — the EQUITY/OPTIONS sets and their phase placements are reasoned starting points, not derived from data. The simulation layer cannot validate them either: it models GBM on the instrument, whereas an option premium is a convex function of the underlying plus time decay.
@@ -216,7 +216,7 @@ Unchanged from the previous milestone.
 ## 10. Test suite summary
 
 ```
-298 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
+309 tests, 0 failures, 0 errors, 0 skipped — BUILD SUCCESS
 ```
 
 | Test class | Tests |

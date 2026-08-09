@@ -4,6 +4,7 @@ import com.kbquants.instrument.InstrumentAwareTrackRequestResolver;
 import com.kbquants.instrument.InstrumentCatalog;
 import com.kbquants.instrument.InstrumentMasterLoader;
 import com.kbquants.instrument.PositionSizer;
+import com.kbquants.live.EndOfDaySchedule;
 import com.kbquants.live.TradeMonitor;
 import com.kbquants.live.UpstoxDataCredentials;
 import com.kbquants.live.UpstoxMarketDataFeed;
@@ -28,6 +29,8 @@ import com.kbquants.session.TradeFillEvent;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -111,6 +114,11 @@ public class Main {
         TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
                 trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore);
 
+        EndOfDaySchedule endOfDay = endOfDaySchedule(tradeMonitor);
+        if (endOfDay != null) {
+            endOfDay.start();
+        }
+
         TelegramCommandHandler commandHandler = new TelegramCommandHandler(credentials, tradeMonitor);
         commandHandler.start();
 
@@ -168,6 +176,31 @@ public class Main {
                     (int) (MilestoneLadder.optionsLadder().getHardStopPercent() * 100));
         }
         return value;
+    }
+
+    /**
+     * Off unless EOD_EXIT_TIME is set. Closing positions on a clock is a
+     * decision with real consequences, so it is opted into rather than
+     * assumed -- and a wrong or misread time would square off a position
+     * hours early.
+     * <p>
+     * The zone defaults to the market's, not the machine's: a VM on UTC
+     * would otherwise fire five and a half hours late, well after the
+     * broker had already squared the position off itself.
+     */
+    private static EndOfDaySchedule endOfDaySchedule(TradeMonitor tradeMonitor) {
+
+        String configured = System.getenv("EOD_EXIT_TIME");
+        if (configured == null || configured.isBlank()) {
+            log.info("EOD_EXIT_TIME is not set — no end-of-day close; your broker will square off intraday "
+                    + "positions on its own terms.");
+            return null;
+        }
+
+        LocalTime cutoff = LocalTime.parse(configured.trim());
+        ZoneId zone = ZoneId.of(System.getenv().getOrDefault("EOD_TIMEZONE", "Asia/Kolkata"));
+
+        return new EndOfDaySchedule(cutoff, zone, tradeMonitor::onEndOfDay);
     }
 
     private static MarketDataFeed simulatedFeed(TradeFillEvent fill) {

@@ -258,6 +258,18 @@ Selection rules:
 - **You cannot switch while a trade is open.** Open trades keep the set they were opened with, so switching mid-flight would make "active" mean something other than what is managing your position. Exit first, then choose.
 - Numbers live in `MilestoneLadder` — changing them is a code change, deliberately, since they encode trading intent worth reviewing in a diff. Only the *choice* is a runtime decision.
 
+## End-of-day close
+
+Set `EOD_EXIT_TIME` (e.g. `15:15`) and open trades are closed out at that wall-clock time, before your broker squares them off at whatever price it gets. Unset, nothing happens — closing positions on a clock has real consequences, so it's opted into rather than assumed.
+
+`EOD_TIMEZONE` defaults to **`Asia/Kolkata`**, deliberately not the machine's zone: a VM on UTC would otherwise fire five and a half hours late, well after the broker had already acted.
+
+- **`MANAGED` trades are closed**, moved to `PHASE_4`, and settled with real exit-price charges.
+- **`OBSERVED` trades are not.** That mode means you took the trigger back, so you get a warning to close it yourself rather than a silent sale.
+- **`RELEASED` trades are left alone entirely.**
+
+The schedule runs on its own clock rather than off price ticks — a tick-driven check wouldn't fire when the feed is dead or the instrument is quiet, which is exactly when an unattended position most needs closing. Starting the app after the cutoff won't retroactively square anything off.
+
 ## Surviving a restart
 
 The position doesn't disappear when the process does. Open trades are written to `~/.xit-mc/open-trades.json` (override with `TRADE_STATE_FILE`) whenever something material changes — a new trade, the stop ratcheting, a phase advancing, a milestone crossing, a mode change, a close — and restored on the next start.
