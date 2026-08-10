@@ -1,6 +1,6 @@
 # xit-mc Product Requirements Document
 
-> Version 2.0 — August 2026
+> Version 2.1 — August 2026
 
 ## 1. Product vision
 
@@ -39,7 +39,7 @@ The product answers one question: **given that we are in a trade, when and how d
 
 ## 3. Target users
 
-The primary user is the developer-trader (the team itself) running this system. There is no multi-user, multi-tenant, or public-facing UI requirement at this stage.
+Up to **10 independent traders**, each with their own Upstox account and their own Telegram chat. Each trader's trades, credentials, risk settings and milestone-set choice are fully isolated from every other trader's — one shares nothing except the running process and, optionally, the deployment host's static IP. This is account isolation for a small, known set of people invited by the team, not a public sign-up product: accounts are provisioned by whoever operates the deployment, not self-served through the bot.
 
 ## 4. System architecture
 
@@ -238,20 +238,37 @@ Full end-to-end flow without a real broker:
 
 Purpose: validate the entire pipeline before connecting to a real broker.
 
+### F8. Multi-account isolation
+
+One running process serves every trader. What's shared and what isn't:
+
+| Shared across all accounts | Isolated per account |
+|---|---|
+| The JVM process, the Telegram bot token, the instrument master cache, the deployment host's static IP | Upstox credentials + daily order token, open trades, stop-loss/phase/ownership state, risk settings (`CAPITAL_PER_TRADE`, `MAX_RISK_PER_TRADE`), active milestone set, trade persistence file, Telegram chat |
+
+- Every inbound Telegram command carries the sender's `chat.id`. The bot resolves it against a small **account registry** (one entry per trader) before dispatching — an unrecognised chat gets a polite refusal, never access to another account's state.
+- Each registered account gets its own `TradeMonitor` instance (its own `TradeContext` map, its own feeds, its own `Notifier` bound to that trader's chat). Nothing about `ExitEngine`, `PhaseManager`, `StopLossEngine`, or the ownership strategies changes — isolation is achieved by running N of them side by side, not by teaching the engine about accounts.
+- Registering a new trader is a config addition (credentials + chat id), not a code or deployment change.
+- The static-IP requirement (F5, "the daily order token") is per Upstox *account*, not per server: all 10 traders can share the same production host's IP, but each must individually register that IP against their own Upstox developer app.
+
+Out of scope for the MVP: self-service onboarding, a web UI for account management, and per-account infrastructure (separate processes/hosts). Ten known traders is small enough that an operator-managed account list is the right amount of engineering.
+
 ## 6. Credential management
 
-No secrets are stored in the repository. All credentials are supplied via environment variables:
+No secrets are stored in the repository. A single bot token is process-wide; every other credential is per-account.
 
-| Variable | Purpose | Required |
-|---|---|---|
-| `UPSTOX_API_KEY` | Upstox API key | For live mode |
-| `UPSTOX_API_SECRET` | Upstox API secret | For live mode |
-| `UPSTOX_REDIRECT_URI` | OAuth redirect URI | For live mode |
-| `UPSTOX_ACCESS_TOKEN` | Daily OAuth token (expires nightly) | For live mode |
-| `UPSTOX_SANDBOX` | Use sandbox API (`true`/`false`, default `false`) | No |
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token | Yes (MVP) |
-| `TELEGRAM_CHAT_ID` | Telegram chat to receive alerts | Yes (MVP) |
-| `TRADING_MODE` | `paper` or `live` (default `paper`) | No |
+| Variable / field | Purpose | Scope | Required |
+|---|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token | Process-wide | Yes |
+| Per-account: `telegramChatId` | Which chat this account's trades and alerts belong to | Per account | Yes |
+| Per-account: `upstoxApiKey` / `upstoxApiSecret` / `upstoxRedirectUri` | Upstox OAuth app credentials | Per account | For live mode |
+| Per-account: `upstoxAnalyticsToken` | Year-valid, read-only — live market data, no daily login | Per account | For live market data |
+| Per-account: daily order token (supplied via that account's own `/token`) | Order placement + position queries; expires at 3:30 AM | Per account | For real orders |
+| Per-account: `capitalPerTrade` / `maxRiskPerTrade` | Position sizing | Per account | For live mode |
+| `UPSTOX_SANDBOX` | Use sandbox API (`true`/`false`, default `false`) | Process-wide | No |
+| `TRADING_MODE` | `paper` or `live` (default `paper`) | Process-wide | No |
+
+Per-account fields are never environment variables in the single-account sense (`UPSTOX_API_KEY` etc. no longer make sense once N accounts share a process) — see IMPLEMENTATION_PLAN.md Phase 3.5 for the registry design that replaces them. The same rule applies regardless of storage shape: nothing lives in git, ever.
 
 ## 7. Non-functional requirements
 
@@ -292,17 +309,28 @@ No secrets are stored in the repository. All credentials are supplied via enviro
 - **Wire ExitEngine into live monitoring**: stop-loss + phases + ownership on every price tick
 - **Force exit**: via Telegram `/exit` command
 
-### Phase 3 — Real exit orders
+### Phase 3 — Real exit orders (DONE, unverified against real network)
 
-- Replace/augment Telegram alerts with limit/GTT exit orders at milestones
-- Position reconciliation on startup
+- Real MARKET sell orders (`UpstoxExitOrderPlacer`), behind `PLACE_REAL_ORDERS`
+- Broker fill detection with explicit adoption (`WATCH_BROKER_FILLS`)
+- Position reconciliation (`/positions`, automatic on `/token`)
+- Trade persistence across restarts; end-of-day forced close (PHASE_4)
+- Not yet exercised against real Upstox/Telegram servers — see §9 risks
+
+### Phase 3.5 — Multi-account support (NEXT)
+
+- Account registry: per-trader credentials, chat id, risk settings (F8)
+- One `TradeMonitor` per registered account instead of one process-wide instance
+- Telegram command routing by `chat.id`
+- Per-account trade persistence
+- See IMPLEMENTATION_PLAN.md for the step-by-step breakdown
 
 ### Phase 4 — Production hardening
 
-- External configuration (YAML) for all thresholds
-- `main()` entry point / CLI
-- PHASE_4 (forced EOD exit) automation
-- Historical data feed
+- Deploy to a host with a registered static IP; verify OAuth, both WebSockets, and order placement against real Upstox servers
+- One supervised real order, single lot, before trusting `PLACE_REAL_ORDERS` unattended
+- External configuration (YAML) for all thresholds, if env-var-per-account outgrows itself
+- Historical data feed (candidate: port `market-data-engine` from the `kb-test` repo — see REPO_STRATEGY.md)
 - Structured logging, health checks, graceful shutdown
 
 ## 9. Risks and mitigations
@@ -316,6 +344,8 @@ No secrets are stored in the repository. All credentials are supplied via enviro
 | Broker lock-in | All broker interactions behind interfaces; swap implementation, not orchestration |
 | Notification failure during critical move | Failures logged, never thrown — monitoring continues |
 | Upstox requires a registered static IP for order-placement APIs only (SEBI algo-trading circular); changing it is rate-limited to once/week and invalidates the access token | Doesn't block Phase 0-2 (no order calls yet). Before Phase 3 (`ExitOrderPlacer`): host on infrastructure with a reserved/static public IP, register it via Upstox's `PUT /user/ip`, and treat it as a rarely-changed deployment constant, not something rotated casually |
+| One account's bug or bad input (malformed command, credential problem) takes down every account sharing the process | Each `TradeMonitor` is independent per account; a fault in one account's feed/engine must not throw across account boundaries. Command dispatch resolves the account first and catches per-account, so one broken registration cannot break the shared Telegram poller for everyone else |
+| A misrouted command lets one trader see or act on another trader's trades | Routing keys strictly on `chat.id` → account, resolved before any `TradeMonitor` method is called; no command path accepts an account id from the message body |
 
 ## 10. Glossary
 

@@ -470,3 +470,4 @@ mvn test -Dtest=PhaseManagerTest   # a single test class
 | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | Phased roadmap, what's done vs. next |
 | [CODING_STANDARDS.md](CODING_STANDARDS.md) | Conventions, testing rules, versioning policy |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Detailed snapshot of what's implemented, package by package |
+| [REPO_STRATEGY.md](REPO_STRATEGY.md) | Why this repo is the product, and what the `kb-test` repo is for |

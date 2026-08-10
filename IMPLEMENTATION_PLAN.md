@@ -1,6 +1,6 @@
 # xit-mc Implementation Plan
 
-> Version 2.0 — August 2026
+> Version 2.1 — August 2026
 
 Phased roadmap from the current state to a production-ready exit management system. Each step lists concrete deliverables, files affected, and acceptance criteria.
 
@@ -275,6 +275,74 @@ Adding a set is adding a `MilestoneLadder` factory; nothing else is needed.
 - [x] Positions opened at the broker are detected and offered for adoption
 - [x] Managed trades checked against the broker's actual positions, and stood down when they disagree
 - [x] ~~Conservative/Moderate/Aggressive~~ → named milestone sets produce measurably different exit behaviour (step 3.3)
+
+---
+
+## Phase 3.5: Multi-account support
+
+**Goal:** Up to 10 traders, each with their own Upstox account and Telegram chat, run on the same process with zero cross-visibility. Every account's trades, stop-losses, risk settings and milestone-set choice are isolated from every other account's.
+
+This phase exists because the product target changed from "one developer-trader" to "up to 10 independent traders" (see PRODUCT_REQUIREMENTS.md §3, F8). It sits before Phase 4 because production hardening (static IP, real-order verification) is only worth doing once against the shape the system will actually run in — verifying single-account behavior and then re-verifying after a multi-account rewrite would duplicate the riskiest work.
+
+**Why this is tractable in one phase:** `TradeMonitor`, `ExitEngine`, `OrderFillFeed`, `MarketDataFeed`, and `ExitOrderPlacer` are already broker-agnostic interfaces with no global/static state (CODING_STANDARDS.md §3, §6). Isolation is achieved by constructing **one full set of these per account**, not by adding account-awareness inside the engine. `ExitEngine`, `PhaseManager`, `StopLossEngine`, and the ownership strategies need zero changes.
+
+### Step 3.5.1 — Account registry
+
+| Item | Detail |
+|---|---|
+| New class | `com.kbquants.domain.TraderAccount` — immutable: `accountId`, `telegramChatId`, Upstox credentials, `capitalPerTrade`, `maxRiskPerTrade`, default milestone set |
+| New class | `com.kbquants.session.AccountRegistry` — loads all configured accounts at startup, indexes by `accountId` and by `telegramChatId` |
+| Storage | A single gitignored config file (e.g. `accounts.yml`, alongside the existing gitignored `run.sh`/`run.ps1` pattern) — 10 known accounts don't warrant a database. One entry per trader, same fields as today's per-process env vars |
+| Validation | Fail fast at startup on a malformed or duplicate `telegramChatId`/`accountId` — better to refuse to start than to silently misroute one trader's trades to another |
+
+**Tests:** `AccountRegistryTest` — load valid config, reject duplicate chat ids, reject duplicate account ids, lookup by either key, missing-file behavior.
+
+### Step 3.5.2 — Per-account TradeMonitor
+
+| Item | Detail |
+|---|---|
+| Refactor | `Main` builds `Map<accountId, TradeMonitor>` from the registry instead of one process-wide `TradeMonitor` |
+| Construction | Each `TradeMonitor` gets its own `OrderFillFeed`, `MarketDataFeed` factory, `ExitOrderPlacer`, `Notifier` (bound to that account's chat id), and `MilestoneLadder`/risk settings — the same constructor `TradeMonitor` already takes today, just called N times instead of once |
+| Isolation guarantee | No shared mutable state between `TradeMonitor` instances — each owns its own `TradeContext` map, per CODING_STANDARDS.md §6 |
+| Fault isolation | A construction or runtime failure in one account's feed must not prevent the others from starting/running — catch and log per account in `Main`, never let one bad registration abort the whole process |
+
+**Tests:** extend `TradeMonitorTest` fakes to confirm two `TradeMonitor` instances sharing no state don't observe each other's fills/ticks (a fill on monitor A's fake feed must not appear in monitor B's trade list).
+
+### Step 3.5.3 — Telegram command routing by chat id
+
+| Item | Detail |
+|---|---|
+| Refactor | `TelegramCommandHandler` already receives `chat.id` on every update (Telegram's `getUpdates` payload) — today it's discarded in favor of the single `TELEGRAM_CHAT_ID` env var. Resolve it against `AccountRegistry` instead |
+| Behavior | Recognised chat id → dispatch to that account's `TradeMonitor`. Unrecognised chat id → fixed "not a registered account" reply, nothing else (no account enumeration, no hint about who *is* registered) |
+| Outbound | `TelegramNotifier` for a given `TradeMonitor` sends only to that account's `telegramChatId`, never the others |
+
+**Tests:** extend `TelegramCommandHandlerTest` — same command text from two different chat ids resolves to two different accounts; unknown chat id gets the refusal and touches no `TradeMonitor`.
+
+### Step 3.5.4 — Per-account persistence
+
+| Item | Detail |
+|---|---|
+| Refactor | `JsonTradeStore` keys its file path (or top-level JSON key) by `accountId` — `~/.xit-mc/open-trades/<accountId>.json` rather than one shared file |
+| Restart behavior | Every account's open trades restore to that account only; a corrupt file for one account must not block the others from loading (same "missing file → start empty, don't refuse to start" principle already applied per-process today) |
+
+**Tests:** extend `TradeMonitorPersistenceTest` — two accounts' trades round-trip independently; a corrupt file for account A doesn't prevent account B's trades from loading.
+
+### Step 3.5.5 — Per-account daily order token
+
+No new code beyond 3.5.3: once `/token` is routed by chat id, it is inherently per-account. Each trader supplies their own daily Upstox token in their own chat; `PLACE_REAL_ORDERS` and reconciliation already read whichever token is attached to the account making the call.
+
+### Step 3.5.6 — Static IP: shared host, per-account registration (operational, not code)
+
+One production host and one static IP serve all 10 accounts — Upstox's rule is about where the order-placement HTTP call originates, not which account it's for. But each of the 10 traders must **individually** register that same IP against their own Upstox developer app (`PUT /user/ip`, using their own token). This is a one-time step per trader to do during onboarding, not a code change.
+
+### Acceptance criteria (Phase 3.5 complete when all are true)
+
+- [ ] 2+ accounts configured with distinct chat ids and credentials, running trades simultaneously
+- [ ] A command sent from account A's chat never reads or changes account B's trades
+- [ ] Each account's persistence file round-trips independently across a restart
+- [ ] A malformed or failing account (bad credentials, feed error) does not prevent other accounts from running
+- [ ] Adding an 11th account is a config-only change — no code, no redeploy of logic
+- [ ] All existing single-account tests still pass unmodified in spirit (ported to construct one account rather than reading process-wide env vars)
 
 ---
 
