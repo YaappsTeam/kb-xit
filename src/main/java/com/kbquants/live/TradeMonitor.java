@@ -1,13 +1,15 @@
 package com.kbquants.live;
 
 import com.kbquants.domain.ActiveLadder;
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.MilestoneSets;
 import com.kbquants.domain.MonitorMode;
 import com.kbquants.domain.OwnershipMode;
+import com.kbquants.domain.Phase;
 import com.kbquants.domain.RiskSettings;
 import com.kbquants.domain.TradeContext;
+import com.kbquants.domain.TradingToken;
 import com.kbquants.engine.ExitEngine;
 import com.kbquants.notification.Notifier;
 import com.kbquants.notification.ProfitMilestoneTracker;
@@ -20,10 +22,24 @@ import com.kbquants.session.EstimatedChargesService;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.TradeCost;
 import com.kbquants.session.OrderFillFeed;
+import com.kbquants.session.ExitOrderPlacer;
+import com.kbquants.session.ExitReason;
+import com.kbquants.session.PaperExitOrderPlacer;
 import com.kbquants.session.TradeFillEvent;
+import com.kbquants.session.TradeSnapshot;
+import com.kbquants.session.TradeStore;
+import com.kbquants.session.NoOpTradeStore;
+import com.kbquants.session.BrokerPosition;
+import com.kbquants.session.NoOpPositionQuery;
+import com.kbquants.session.PositionQuery;
+import com.kbquants.session.PositionQueryException;
+import com.kbquants.session.PositionReconciliation;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -84,6 +100,64 @@ public class TradeMonitor implements TelegramCommandListener {
     /** Shared with position sizing, so /risk applies to the next trade. */
     private final RiskSettings riskSettings;
 
+    /** Where open trades are kept so a restart does not lose them. */
+    private final TradeStore tradeStore;
+
+    /**
+     * Whether fills arriving from the feed must be adopted explicitly.
+     * <p>
+     * A broker's order stream carries fills for the <b>whole account</b>:
+     * a trade punched into the mobile app, a leg of a hedge, a position
+     * from another strategy. Managing those uninvited would apply exit
+     * rules never meant for them, so with this on a detected fill is
+     * offered and waits.
+     */
+    private final boolean requireExplicitAdoption;
+
+    /** Detected fills waiting for a yes or no. */
+    private final Map<String, TradeFillEvent> pendingAdoptions = new ConcurrentHashMap<>();
+
+    /** Retained so it can be told when the daily token arrives. */
+    private final OrderFillFeed orderFillFeed;
+
+    /** Places the sell order that actually closes a position. */
+    private final ExitOrderPlacer exitOrderPlacer;
+
+    /**
+     * Asks the broker what is actually open, so a trade closed by hand --
+     * or while this was down -- does not go on being managed.
+     */
+    private final PositionQuery positionQuery;
+
+    /**
+     * The daily order-placement token, supplied at runtime via /token.
+     * Held here because the Telegram control plane is where it arrives.
+     */
+    private final TradingToken tradingToken;
+
+    /**
+     * Order ids already taken on, kept after the trade itself is dropped.
+     * <p>
+     * activeTrades used to double as the duplicate-fill guard, which is why
+     * closed trades were never removed from it -- and why it grew for the
+     * life of the process, holding an engine, a tracker and a cost record
+     * per trade ever taken. Ids alone are cheap, so the guard survives
+     * while the trade does not.
+     * <p>
+     * Bounded: a long-running process should not accumulate ids forever
+     * either, and a fill replayed thousands of trades later is not a
+     * duplicate worth guarding against.
+     */
+    private final Set<String> handledOrderIds = Collections.newSetFromMap(
+            Collections.synchronizedMap(new LinkedHashMap<>() {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > MAX_REMEMBERED_ORDER_IDS;
+                }
+            }));
+
+    private static final int MAX_REMEMBERED_ORDER_IDS = 5_000;
+
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                         Notifier notifier, TrackRequestResolver trackRequestResolver) {
         this(orderFillFeed, feedFactory, notifier, trackRequestResolver, MilestoneLadder.defaultLadder(),
@@ -108,6 +182,46 @@ public class TradeMonitor implements TelegramCommandListener {
                 new RiskSettings(0));
     }
 
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, new NoOpTradeStore());
+    }
+
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, new PaperExitOrderPlacer());
+    }
+
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, exitOrderPlacer, new TradingToken(java.time.ZoneId.of("Asia/Kolkata")));
+    }
+
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, exitOrderPlacer, tradingToken, false);
+    }
+
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken,
+                         boolean requireExplicitAdoption) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, exitOrderPlacer, tradingToken, requireExplicitAdoption,
+                new NoOpPositionQuery());
+    }
+
     /**
      * Takes the ActiveLadder rather than a ladder so that position sizing,
      * which needs the same hard stop, cannot drift out of step when the
@@ -115,14 +229,129 @@ public class TradeMonitor implements TelegramCommandListener {
      */
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                          Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
-                         ChargesService chargesService, RiskSettings riskSettings) {
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken,
+                         boolean requireExplicitAdoption, PositionQuery positionQuery) {
+        this.positionQuery = Objects.requireNonNull(positionQuery, "positionQuery must not be null");
+        this.requireExplicitAdoption = requireExplicitAdoption;
+        this.tradingToken = Objects.requireNonNull(tradingToken, "tradingToken must not be null");
+        this.exitOrderPlacer = Objects.requireNonNull(exitOrderPlacer, "exitOrderPlacer must not be null");
+        this.tradeStore = Objects.requireNonNull(tradeStore, "tradeStore must not be null");
         this.riskSettings = Objects.requireNonNull(riskSettings, "riskSettings must not be null");
         this.chargesService = Objects.requireNonNull(chargesService, "chargesService must not be null");
         this.feedFactory = Objects.requireNonNull(feedFactory, "feedFactory must not be null");
         this.notifier = Objects.requireNonNull(notifier, "notifier must not be null");
         this.trackRequestResolver = Objects.requireNonNull(trackRequestResolver, "trackRequestResolver must not be null");
         this.activeLadder = Objects.requireNonNull(activeLadder, "activeLadder must not be null");
-        Objects.requireNonNull(orderFillFeed, "orderFillFeed must not be null").start(this::onFill);
+        this.orderFillFeed = Objects.requireNonNull(orderFillFeed, "orderFillFeed must not be null");
+        restore();
+        orderFillFeed.start(this::onDetectedFill);
+    }
+
+    /**
+     * A fill arriving from the feed rather than from /track.
+     * <p>
+     * With explicit adoption on, this only offers: the alternative is
+     * silently managing whatever the account happens to trade, which is
+     * how a hedge leg or somebody else's strategy ends up with this
+     * system's exit rules applied to it.
+     */
+    void onDetectedFill(TradeFillEvent fill) {
+
+        if (!requireExplicitAdoption) {
+            onFill(fill);
+            return;
+        }
+
+        if (activeTrades.containsKey(fill.getOrderId()) || handledOrderIds.contains(fill.getOrderId())) {
+            return;
+        }
+        if (pendingAdoptions.putIfAbsent(fill.getOrderId(), fill) != null) {
+            return;
+        }
+
+        log.info("Detected an unmanaged fill: orderId={} instrument={} qty={}",
+                fill.getOrderId(), fill.getInstrumentKey(), fill.getFilledQuantity());
+
+        LinkedHashMap<String, String> choices = new LinkedHashMap<>();
+        String token = TelegramCommandHandler.ADOPT_CALLBACK_PREFIX + fill.getOrderId();
+        if (TelegramCommandHandler.fitsCallbackData(token)) {
+            choices.put("Manage the exit of this", token);
+            choices.put("Leave it alone", TelegramCommandHandler.IGNORE_CALLBACK_PREFIX + fill.getOrderId());
+        }
+
+        String prompt = String.format(
+                "New position detected at your broker: %s x%d at %.2f (orderId=%s).%n"
+                        + "It is NOT being managed. Adopt it only if you want this system running its exit rules on it.",
+                fill.getDisplaySymbol(), fill.getFilledQuantity(), fill.getAveragePrice(), fill.getOrderId());
+
+        if (choices.isEmpty()) {
+            notifier.send(prompt + System.lineSeparator() + "Send /adopt " + fill.getOrderId() + " to take it on.");
+        } else {
+            notifier.sendChoices(prompt, choices);
+        }
+    }
+
+    @Override
+    public void onAdoptRequested(String orderId) {
+
+        TradeFillEvent fill = pendingAdoptions.get(orderId);
+        if (fill == null) {
+            notifier.send("Nothing pending with orderId=" + orderId
+                    + " — it may have been adopted, ignored, or never detected.");
+            return;
+        }
+
+        // Paused is checked before the offer is consumed. onFill refuses
+        // while paused, and dropping the offer on the way in would lose a
+        // real position with no way to get it back.
+        if (!adoptingNewTrades) {
+            notifier.send(fill.getDisplaySymbol() + ": adoption is paused (/resume, then /adopt "
+                    + orderId + "). Still waiting.");
+            return;
+        }
+
+        pendingAdoptions.remove(orderId);
+        log.info("Adopting detected fill orderId={}", orderId);
+        onFill(fill);
+    }
+
+    @Override
+    public void onIgnoreRequested(String orderId) {
+
+        TradeFillEvent fill = pendingAdoptions.remove(orderId);
+        if (fill == null) {
+            notifier.send("Nothing pending with orderId=" + orderId);
+            return;
+        }
+        // Remembered so the same fill is not offered again on a reconnect.
+        handledOrderIds.add(orderId);
+        log.info("Ignoring detected fill orderId={}", orderId);
+        notifier.send(fill.getDisplaySymbol() + ": left alone — this system will not touch it.");
+    }
+
+    @Override
+    public void onPendingAdoptionsRequested() {
+
+        if (pendingAdoptions.isEmpty()) {
+            notifier.send("No positions waiting to be adopted");
+            return;
+        }
+
+        LinkedHashMap<String, String> choices = new LinkedHashMap<>();
+        for (TradeFillEvent fill : pendingAdoptions.values()) {
+            String token = TelegramCommandHandler.ADOPT_CALLBACK_PREFIX + fill.getOrderId();
+            if (TelegramCommandHandler.fitsCallbackData(token)) {
+                choices.put(String.format("%s x%d at %.2f",
+                        fill.getDisplaySymbol(), fill.getFilledQuantity(), fill.getAveragePrice()), token);
+            }
+        }
+
+        if (choices.isEmpty()) {
+            notifier.send("Positions waiting, but their ids are too long for buttons — use /adopt <orderId>");
+            return;
+        }
+        notifier.sendChoices("Positions detected but not managed:", choices);
     }
 
     void onFill(TradeFillEvent fill) {
@@ -153,21 +382,135 @@ public class TradeMonitor implements TelegramCommandListener {
 
         TradeContext context = new TradeContext(
                 fill.getOrderId(), fill.getAveragePrice(), breakeven,
-                fill.getFilledQuantity(), ExitModel.MODERATE, OwnershipMode.MILESTONE);
+                fill.getFilledQuantity(), OwnershipMode.MILESTONE);
 
         ActiveTrade trade = new ActiveTrade(fill, context, new ExitEngine(context, ladderForTrade),
-                new ProfitMilestoneTracker(breakeven, ladderForTrade), cost);
+                new ProfitMilestoneTracker(breakeven, ladderForTrade), cost, ladderForTrade);
 
-        if (activeTrades.putIfAbsent(fill.getOrderId(), trade) != null) {
+        if (!handledOrderIds.add(fill.getOrderId())) {
             log.debug("Ignoring duplicate fill event for orderId={}", fill.getOrderId());
             return;
         }
+        activeTrades.put(fill.getOrderId(), trade);
 
         log.info("Tracking new trade: orderId={} instrument={} entryPrice={} breakeven={} cost={}",
                 fill.getOrderId(), fill.getInstrumentKey(), fill.getAveragePrice(), breakeven, cost);
         notifier.send(buildTrackingMessage(fill, cost, breakeven, ladderForTrade));
 
+        persist();
         startFeed(trade);
+    }
+
+    /**
+     * Writes the open trades out. Called after anything that changes what
+     * would need restoring -- a new trade, a moved stop, a phase change, a
+     * mode change, a close -- rather than on every tick, since most ticks
+     * change nothing worth keeping.
+     */
+    private void persist() {
+        tradeStore.save(openTrades().map(TradeMonitor::toSnapshot).toList());
+    }
+
+    static TradeSnapshot toSnapshot(ActiveTrade trade) {
+
+        TradeSnapshot snapshot = new TradeSnapshot();
+        snapshot.setOrderId(trade.fill.getOrderId());
+        snapshot.setInstrumentKey(trade.fill.getInstrumentKey());
+        snapshot.setDisplaySymbol(trade.fill.getDisplaySymbol());
+        snapshot.setEntryPrice(trade.fill.getAveragePrice());
+        snapshot.setQuantity(trade.fill.getFilledQuantity());
+        snapshot.setTickSize(trade.fill.getTickSize());
+
+        snapshot.setBasePrice(trade.context.getBasePrice());
+        snapshot.setPhase(trade.context.getCurrentPhase().name());
+        snapshot.setCurrentStopLoss(trade.context.getCurrentStopLoss());
+        snapshot.setLadderName(trade.ladder.getName());
+        snapshot.setLastPrice(trade.lastPrice);
+        snapshot.setMonitorMode(trade.mode.name());
+
+        snapshot.setNextMilestoneIndex(trade.tracker.getNextThresholdIndex());
+        snapshot.setBreakevenReported(trade.breakevenReported);
+
+        snapshot.setBuyCharges(trade.cost.getBuyCharges());
+        snapshot.setSellCharges(trade.cost.getSellCharges());
+        snapshot.setCostEstimated(trade.cost.isEstimated());
+
+        return snapshot;
+    }
+
+    /**
+     * Rebuilds trades from a previous run and starts watching them again.
+     * <p>
+     * The ratcheted stop is restored as-is rather than recomputed: it may
+     * have been tightened well above the hard stop over the life of the
+     * trade, and recomputing would silently give that protection back.
+     * <p>
+     * The user is told what was resumed, because this system cannot know
+     * whether the position is still open at the broker -- it may have been
+     * closed by hand while the process was down.
+     */
+    private void restore() {
+
+        List<TradeSnapshot> saved = tradeStore.load();
+        if (saved.isEmpty()) {
+            return;
+        }
+
+        StringBuilder summary = new StringBuilder("Resumed " + saved.size() + " trade(s) from before the restart:");
+
+        for (TradeSnapshot snapshot : saved) {
+            try {
+                ActiveTrade trade = fromSnapshot(snapshot);
+                activeTrades.put(trade.fill.getOrderId(), trade);
+                if (trade.mode != MonitorMode.RELEASED) {
+                    startFeed(trade);
+                }
+                summary.append(String.format("%n  %s entry %.2f, breakeven %.2f, stop %.2f, %s [%s]",
+                        trade.fill.getDisplaySymbol(), trade.fill.getAveragePrice(), trade.context.getBasePrice(),
+                        trade.context.getCurrentStopLoss(), trade.context.getCurrentPhase(), trade.mode));
+            } catch (Exception e) {
+                log.error("Could not resume trade {}: {}", snapshot.getOrderId(), e.getMessage());
+                summary.append(String.format("%n  %s could NOT be resumed (%s) — manage it yourself",
+                        snapshot.getDisplaySymbol(), e.getMessage()));
+            }
+        }
+
+        summary.append(System.lineSeparator())
+               .append("Check these are still open at your broker — positions closed while this was down are not known here.");
+
+        log.info("Resumed {} trade(s) from {}", saved.size(), tradeStore.getClass().getSimpleName());
+        notifier.send(summary.toString());
+    }
+
+    private ActiveTrade fromSnapshot(TradeSnapshot snapshot) {
+
+        MilestoneLadder ladder = MilestoneSets.byName(snapshot.getLadderName())
+                .orElseGet(() -> {
+                    log.warn("Unknown milestone set {} in saved trade {} -- falling back to the active set",
+                            snapshot.getLadderName(), snapshot.getOrderId());
+                    return activeLadder.get();
+                });
+
+        TradeFillEvent fill = new TradeFillEvent(snapshot.getOrderId(), snapshot.getInstrumentKey(),
+                snapshot.getEntryPrice(), snapshot.getQuantity(), snapshot.getTickSize(),
+                snapshot.getDisplaySymbol());
+
+        TradeContext context = new TradeContext(snapshot.getOrderId(), snapshot.getEntryPrice(),
+                snapshot.getBasePrice(), snapshot.getQuantity(), OwnershipMode.MILESTONE);
+        context.setCurrentPhase(Phase.valueOf(snapshot.getPhase()));
+        context.setCurrentStopLoss(snapshot.getCurrentStopLoss());
+
+        TradeCost cost = new TradeCost(snapshot.getBuyCharges(), snapshot.getSellCharges(),
+                snapshot.getEntryPrice() * snapshot.getQuantity(), snapshot.isCostEstimated());
+
+        ActiveTrade trade = new ActiveTrade(fill, context, new ExitEngine(context, ladder),
+                new ProfitMilestoneTracker(snapshot.getBasePrice(), ladder, snapshot.getNextMilestoneIndex()),
+                cost, ladder);
+
+        trade.lastPrice = snapshot.getLastPrice() > 0 ? snapshot.getLastPrice() : snapshot.getEntryPrice();
+        trade.breakevenReported = snapshot.isBreakevenReported();
+        trade.mode = MonitorMode.valueOf(snapshot.getMonitorMode());
+        return trade;
     }
 
     /**
@@ -230,7 +573,17 @@ public class TradeMonitor implements TelegramCommandListener {
         }
 
         trade.lastPrice = currentPrice;
+
+        // Most ticks change nothing worth keeping, so the write is driven
+        // by the stop ratcheting or the phase advancing rather than by
+        // every price that arrives.
+        double stopBefore = trade.context.getCurrentStopLoss();
+        Phase phaseBefore = trade.context.getCurrentPhase();
+
         trade.engine.onPriceUpdate(currentPrice, trade.context);
+
+        boolean materialChange = trade.context.getCurrentStopLoss() != stopBefore
+                || trade.context.getCurrentPhase() != phaseBefore;
 
         if (!trade.context.isClosed() && trade.context.getCurrentStopLoss() > 0
                 && currentPrice <= trade.context.getCurrentStopLoss()) {
@@ -252,12 +605,15 @@ public class TradeMonitor implements TelegramCommandListener {
                 return;
             }
 
-            trade.engine.forceExit(trade.context, currentPrice);
-            stopFeed(trade);
+            if (!closePosition(trade, currentPrice, ExitReason.STOP_LOSS)) {
+                return;
+            }
             log.info("Stop-loss hit: orderId={} instrument={} price={} stopLoss={}",
                     trade.fill.getOrderId(), trade.fill.getInstrumentKey(), currentPrice, stopLoss);
             notifier.send(String.format("%s: stop-loss hit at %.2f (sl=%.2f) — trade closed%n%s",
                     trade.fill.getInstrumentKey(), currentPrice, stopLoss, settlement(trade, currentPrice)));
+            discard(trade);
+            persist();
             return;
         }
 
@@ -265,8 +621,10 @@ public class TradeMonitor implements TelegramCommandListener {
         // net profit by definition, and the ladder only carries positive
         // thresholds. It is the first thing worth telling the user --
         // from here on, anything gained is theirs.
+        boolean breakevenJustReported = false;
         if (!trade.breakevenReported && currentPrice >= trade.context.getBasePrice()) {
             trade.breakevenReported = true;
+            breakevenJustReported = true;
             notifier.send(String.format("%s: breakeven — costs of %.2f covered at %.2f",
                     trade.fill.getInstrumentKey(), trade.cost.getTotalCharges(), currentPrice));
         }
@@ -274,6 +632,10 @@ public class TradeMonitor implements TelegramCommandListener {
         OptionalDouble crossed = trade.tracker.checkAndAdvance(currentPrice);
         if (crossed.isPresent()) {
             notifier.send(formatMilestoneMessage(trade.fill, currentPrice, crossed.getAsDouble(), trade));
+        }
+
+        if (materialChange || crossed.isPresent() || breakevenJustReported) {
+            persist();
         }
     }
 
@@ -335,6 +697,57 @@ public class TradeMonitor implements TelegramCommandListener {
     @Override
     public void onMalformedCommand(String command, String usage) {
         notifier.send(command + " needs arguments — usage: " + usage);
+    }
+
+    /**
+     * Closes out at the end-of-day cutoff, so intraday positions are not
+     * left for the broker to square off at whatever price it gets.
+     * <p>
+     * Only MANAGED trades are closed. OBSERVED means the user took the
+     * trigger back, so it is told rather than acted on -- silently selling
+     * a position someone had explicitly taken manual control of would be
+     * the one thing that mode promises not to do. RELEASED is left alone
+     * entirely.
+     */
+    public void onEndOfDay() {
+
+        List<ActiveTrade> open = openTrades().toList();
+        if (open.isEmpty()) {
+            log.info("End-of-day cutoff reached with no open trades");
+            return;
+        }
+
+        for (ActiveTrade trade : open) {
+
+            if (trade.mode == MonitorMode.RELEASED) {
+                continue;
+            }
+
+            if (!trade.mode.isAutoExitAllowed()) {
+                notifier.send(String.format(
+                        "⏰ %s: end-of-day cutoff reached and this trade is only being observed — no exit placed. "
+                                + "Close it yourself or your broker will square it off.",
+                        trade.fill.getDisplaySymbol()));
+                continue;
+            }
+
+            double exitPrice = trade.lastPrice > 0 ? trade.lastPrice : trade.fill.getAveragePrice();
+            trade.context.setCurrentPhase(Phase.PHASE_4);
+
+            if (!closePosition(trade, exitPrice, ExitReason.END_OF_DAY)) {
+                continue;
+            }
+
+            log.info("End-of-day exit: orderId={} instrument={} price={}",
+                    trade.fill.getOrderId(), trade.fill.getInstrumentKey(), exitPrice);
+            notifier.send(String.format("⏰ %s: end-of-day exit at %.2f (orderId=%s)%n%s",
+                    trade.fill.getDisplaySymbol(), exitPrice, trade.fill.getOrderId(),
+                    settlement(trade, exitPrice)));
+
+            discard(trade);
+        }
+
+        persist();
     }
 
     @Override
@@ -402,6 +815,145 @@ public class TradeMonitor implements TelegramCommandListener {
     private static String describeForButton(ActiveTrade trade) {
         return String.format("%s  %.2f → %.2f  [%s]",
                 trade.fill.getDisplaySymbol(), trade.fill.getAveragePrice(), trade.lastPrice, trade.mode);
+    }
+
+    @Override
+    public void onTokenStatusRequested() {
+        notifier.send(tradingToken.describe());
+    }
+
+    /**
+     * Deliberately does not echo the token, log it, or confirm any part of
+     * it. The reply says only that one was accepted.
+     */
+    @Override
+    public void onTokenProvided(String token) {
+        try {
+            tradingToken.set(token);
+            log.info("Trading token supplied");
+
+            // The broker's order stream cannot connect without one, so it
+            // waits at startup and is told here instead.
+            orderFillFeed.onCredentialAvailable();
+            notifier.send("Token accepted — " + tradingToken.describe()
+                    + System.lineSeparator()
+                    + "Delete your message if it is still in the chat: it contains a live credential.");
+
+            // The first moment the broker can be asked anything. Trades
+            // restored from before the restart have been managed on faith
+            // until now, so this is when that gets checked -- off the
+            // command thread, which would otherwise stop answering
+            // Telegram for as long as the call takes.
+            if (positionQuery.isAvailable() && !activeTrades.isEmpty()) {
+                Thread reconcile = new Thread(this::onReconcileRequested, "startup-reconcile");
+                reconcile.setDaemon(true);
+                reconcile.start();
+            }
+        } catch (IllegalArgumentException e) {
+            notifier.send("That token looks empty — send /token <value>");
+        }
+    }
+
+    /**
+     * Checks what this system is managing against what the broker actually
+     * holds.
+     * <p>
+     * Nothing is ever dropped on the strength of this. A trade the broker
+     * does not report is moved to OBSERVED: the engine stops acting on it,
+     * but keeps watching and reporting, and the user decides. Both possible
+     * errors are real -- a position genuinely closed by hand, and one the
+     * API simply did not list (a delivery holding, a settled position, a
+     * bad minute at the broker) -- and dropping the trade would be
+     * unrecoverable while merely standing down is not.
+     * <p>
+     * Acting is what makes a stale trade dangerous: an exit sized from what
+     * this system remembers would sell quantity that is no longer there,
+     * and selling past flat is a short.
+     */
+    @Override
+    public void onReconcileRequested() {
+
+        if (!positionQuery.isAvailable()) {
+            notifier.send("Cannot check your broker: " + tradingToken.describe());
+            return;
+        }
+
+        List<BrokerPosition> positions;
+        try {
+            positions = positionQuery.openPositions();
+        } catch (PositionQueryException e) {
+            log.warn("Reconciliation could not reach the broker: {}", e.getMessage());
+            notifier.send("Could not check your broker (" + e.getMessage() + ")."
+                    + System.lineSeparator() + "Nothing has been changed — trades are still managed as they were.");
+            return;
+        }
+
+        List<PositionReconciliation.TrackedPosition> tracked = openTrades()
+                .map(trade -> new PositionReconciliation.TrackedPosition(
+                        trade.fill.getOrderId(), trade.fill.getInstrumentKey(), trade.fill.getDisplaySymbol(),
+                        trade.fill.getFilledQuantity(), trade.mode == MonitorMode.MANAGED))
+                .toList();
+
+        PositionReconciliation.Report report = PositionReconciliation.compare(tracked, positions);
+        applyReconciliation(report);
+    }
+
+    private void applyReconciliation(PositionReconciliation.Report report) {
+
+        StringBuilder summary = new StringBuilder("Checked against your broker:");
+        summary.append(System.lineSeparator())
+               .append(String.format("  %d confirmed still open", report.getConfirmed().size()));
+
+        for (PositionReconciliation.Discrepancy discrepancy : report.getDiscrepancies()) {
+
+            String orderId = discrepancy.getTracked().getOrderId();
+            ActiveTrade trade = activeTrades.get(orderId);
+            if (trade == null) {
+                continue;
+            }
+
+            summary.append(System.lineSeparator()).append("  ").append(discrepancy.describe());
+
+            if (trade.mode == MonitorMode.MANAGED) {
+                trade.mode = MonitorMode.OBSERVED;
+                log.warn("Reconciliation: orderId={} is {} at the broker — stood down to OBSERVED",
+                        orderId, discrepancy.getKind());
+                summary.append(System.lineSeparator())
+                       .append("    → stopped acting on it (now OBSERVED). /manage ").append(orderId)
+                       .append(" to hand it back, /release ").append(orderId).append(" to drop it.");
+            } else {
+                summary.append(System.lineSeparator())
+                       .append("    → already ").append(trade.mode).append("; nothing changed.");
+            }
+        }
+
+        if (!report.getDiscrepancies().isEmpty()) {
+            persist();
+        }
+
+        for (BrokerPosition position : report.getUntracked()) {
+            summary.append(System.lineSeparator())
+                   .append(String.format("  %s x%d open at your broker, not managed here",
+                           position.getDisplaySymbol(), position.getQuantity()));
+        }
+
+        notifier.send(summary.toString());
+
+        // Offered afterwards, and one message each, so the summary stays
+        // readable and each offer carries its own pair of buttons.
+        for (BrokerPosition position : report.getUntracked()) {
+            onDetectedFill(toFill(position));
+        }
+    }
+
+    /**
+     * A position is not a fill, so the id is synthesised. Prefixed so it is
+     * obvious in /status and in the buttons that this came from a
+     * reconciliation rather than from an order this system saw happen.
+     */
+    private static TradeFillEvent toFill(BrokerPosition position) {
+        return new TradeFillEvent("recon:" + position.getInstrumentKey(), position.getInstrumentKey(),
+                position.getAveragePrice(), position.getQuantity(), 0, position.getDisplaySymbol());
     }
 
     @Override
@@ -483,6 +1035,7 @@ public class TradeMonitor implements TelegramCommandListener {
             log.info("Monitor mode for orderId={} set to {} (was {})", trade.fill.getOrderId(), mode, previous);
             notifier.send(describeModeChange(trade, mode));
         }
+        persist();
     }
 
     /**
@@ -583,12 +1136,82 @@ public class TradeMonitor implements TelegramCommandListener {
 
     private void forceExit(ActiveTrade trade) {
         double exitPrice = trade.lastPrice > 0 ? trade.lastPrice : trade.fill.getAveragePrice();
-        trade.engine.forceExit(trade.context, exitPrice);
-        stopFeed(trade);
+
+        if (!closePosition(trade, exitPrice, ExitReason.MANUAL)) {
+            return;
+        }
+
         log.info("Force exit: orderId={} instrument={} price={}",
                 trade.fill.getOrderId(), trade.fill.getInstrumentKey(), exitPrice);
         notifier.send(String.format("%s: force-exited at %.2f (orderId=%s)%n%s",
                 trade.fill.getInstrumentKey(), exitPrice, trade.fill.getOrderId(), settlement(trade, exitPrice)));
+        discard(trade);
+        persist();
+    }
+
+    /**
+     * Attempts the sell, and only treats the trade as closed if it
+     * succeeded.
+     * <p>
+     * A rejected order means the position is still open at the broker.
+     * Marking it closed would stop the engine managing a live position on
+     * the strength of an order that never happened -- the stop would no
+     * longer be enforced, and the user would believe they were flat. So a
+     * failure is reported loudly and the trade stays under management.
+     *
+     * @return true if the position is now closed
+     */
+    private boolean closePosition(ActiveTrade trade, double exitPrice, ExitReason reason) {
+
+        ExitOrderPlacer.Result result = exitOrderPlacer.placeExit(trade.fill, exitPrice, reason);
+
+        // Unknown is not the same as rejected. The order may be resting at
+        // the exchange, so retrying could sell a position that is already
+        // gone and open a short. The engine stops acting and hands the
+        // trade back rather than guessing.
+        if (result.isUncertain()) {
+            log.error("Exit order outcome UNKNOWN for orderId={} ({}): {}",
+                    trade.fill.getOrderId(), reason, result.getDetail());
+            trade.mode = MonitorMode.OBSERVED;
+            notifier.send(String.format(
+                    "🛑 %s: exit order outcome UNKNOWN — %s%n"
+                            + "It may or may not have been sold, so nothing further will be placed automatically "
+                            + "and this trade is now OBSERVED. Check your broker, then /manage it back or /release it.",
+                    trade.fill.getDisplaySymbol(), result.getDetail()));
+            persist();
+            return false;
+        }
+
+        if (!result.isSuccessful()) {
+            log.error("Exit order FAILED for orderId={} ({}): {}",
+                    trade.fill.getOrderId(), reason, result.getDetail());
+            notifier.send(String.format(
+                    "⚠ %s: exit order FAILED (%s) — %s. The position is still open and still being managed; "
+                            + "close it yourself if this keeps failing.",
+                    trade.fill.getDisplaySymbol(), reason, result.getDetail()));
+            return false;
+        }
+
+        trade.engine.forceExit(trade.context, exitPrice);
+        stopFeed(trade);
+        return true;
+    }
+
+    /**
+     * Drops a finished trade, once its outcome has been reported.
+     * <p>
+     * Everything the trade held -- engine, milestone tracker, cost record,
+     * feed -- goes with it. Previously closed trades stayed in the map for
+     * the life of the process, so every /status, button build and /exit all
+     * walked the whole session's history.
+     * <p>
+     * The order id is deliberately kept, in handledOrderIds, so a replayed
+     * fill cannot re-open a trade that has already been settled.
+     */
+    private void discard(ActiveTrade trade) {
+        activeTrades.remove(trade.fill.getOrderId());
+        log.debug("Dropped finished trade orderId={}; {} still open",
+                trade.fill.getOrderId(), activeTrades.size());
     }
 
     /**
@@ -704,6 +1327,7 @@ public class TradeMonitor implements TelegramCommandListener {
         final ExitEngine engine;
         final ProfitMilestoneTracker tracker;
         final TradeCost cost;
+        final MilestoneLadder ladder;
         volatile double lastPrice;
         volatile boolean breakevenReported;
         volatile boolean stopBreachReported;
@@ -712,12 +1336,13 @@ public class TradeMonitor implements TelegramCommandListener {
         volatile MarketDataFeed feed;
 
         ActiveTrade(TradeFillEvent fill, TradeContext context, ExitEngine engine,
-                    ProfitMilestoneTracker tracker, TradeCost cost) {
+                    ProfitMilestoneTracker tracker, TradeCost cost, MilestoneLadder ladder) {
             this.fill = fill;
             this.context = context;
             this.engine = engine;
             this.tracker = tracker;
             this.cost = cost;
+            this.ladder = ladder;
             this.lastPrice = fill.getAveragePrice();
         }
     }

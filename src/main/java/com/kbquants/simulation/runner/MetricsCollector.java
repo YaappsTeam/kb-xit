@@ -29,9 +29,7 @@ public class MetricsCollector {
     private double maxFavorableExcursion = Double.NEGATIVE_INFINITY;
     private double maxAdverseExcursion = Double.POSITIVE_INFINITY;
 
-    private boolean ownershipActivated = false;
     private boolean forceExited = false;
-    private boolean hybridActivated = false;
 
     public MetricsCollector(double entryPrice) {
         this.entryPrice = entryPrice;
@@ -47,13 +45,6 @@ public class MetricsCollector {
         maxFavorableExcursion = Math.max(maxFavorableExcursion, move);
         maxAdverseExcursion = Math.min(maxAdverseExcursion, move);
 
-        if (context.getOwnershipPercentage() > 0) {
-            ownershipActivated = true;
-        }
-
-        if (context.getHybridUpdateCount() > 0) {
-            hybridActivated = true;
-        }
     }
 
     /**
@@ -68,14 +59,11 @@ public class MetricsCollector {
             TradeContext context
     ) {
         return new TradeMetrics(
-                context.getExitModel(),
                 context.getOwnershipMode(),
                 context.getCurrentStopLoss(),
                 context.getCurrentPhase(),
                 maxFavorableExcursion,
                 maxAdverseExcursion,
-                ownershipActivated,
-                hybridActivated,
                 forceExited,
                 context.isClosed()
         );

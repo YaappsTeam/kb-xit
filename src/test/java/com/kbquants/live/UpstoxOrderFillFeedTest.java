@@ -2,12 +2,15 @@ package com.kbquants.live;
 
 import com.kbquants.session.TradeFillEvent;
 import com.upstox.feeder.OrderUpdate;
+import com.kbquants.domain.TradingToken;
 import org.junit.jupiter.api.Test;
+
+import java.time.ZoneId;
 
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -70,11 +73,29 @@ class UpstoxOrderFillFeedTest {
         assertTrue(UpstoxOrderFillFeed.toFillEvent(orderUpdate("complete", null)).isEmpty());
     }
 
+    /**
+     * Waits rather than throwing. The daily token arrives via /token
+     * during the session, so refusing to construct without one would stop
+     * the whole app starting with broker watching enabled.
+     */
     @Test
-    void shouldThrowWhenAccessTokenIsMissing() {
+    void shouldWaitForATokenRatherThanFailingToStart() {
 
-        UpstoxCredentials credentials = new UpstoxCredentials("key", "secret", "https://example.com", null, false);
+        UpstoxOrderFillFeed feed = new UpstoxOrderFillFeed(new TradingToken(ZoneId.of("Asia/Kolkata")));
 
-        assertThrows(IllegalStateException.class, () -> new UpstoxOrderFillFeed(credentials));
+        feed.start(fill -> { });
+
+        assertFalse(feed.isRunning(), "must not connect without a token");
+    }
+
+    @Test
+    void shouldStayDisconnectedWhenToldAboutAnUnusableToken() {
+
+        UpstoxOrderFillFeed feed = new UpstoxOrderFillFeed(new TradingToken(ZoneId.of("Asia/Kolkata")));
+        feed.start(fill -> { });
+
+        feed.onCredentialAvailable();
+
+        assertFalse(feed.isRunning());
     }
 }

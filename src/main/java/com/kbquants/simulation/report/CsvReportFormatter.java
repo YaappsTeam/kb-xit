@@ -10,12 +10,11 @@ public class CsvReportFormatter {
 
         StringBuilder sb = new StringBuilder();
 
-        sb.append("ExitModel,OwnershipMode,FinalSL,Phase,MFE,MAE,Closed\n");
+        sb.append("OwnershipMode,FinalSL,Phase,MFE,MAE,Closed\n");
 
         for (TradeMetrics m : result.getTradeMetricsList()) {
 
-            sb.append(m.getExitModel()).append(",")
-                    .append(m.getOwnershipMode()).append(",")
+            sb                    .append(m.getOwnershipMode()).append(",")
                     .append(m.getFinalStopLoss()).append(",")
                     .append(m.getFinalPhase()).append(",")
                     .append(m.getMaxFavorableExcursion()).append(",")

@@ -35,8 +35,18 @@ public class StopLossEngine {
         updateStopLoss(context, hardSl);
     }
 
+    /**
+     * From PHASE_2 <b>onward</b>, not PHASE_2 alone: once capital has been
+     * protected it stays protected.
+     * <p>
+     * Gated on PHASE_2 exactly, a price gapping straight through to PHASE_3
+     * in one tick skipped breakeven protection entirely -- and if the
+     * ownership lock did not apply that tick, the stop stayed at the hard
+     * stop when it should have been at breakeven. The write ratchets, so
+     * re-applying it in later phases can only ever be a no-op.
+     */
     public void applyBaseProtectionIfEligible(TradeContext context) {
-        if (context.getCurrentPhase() == Phase.PHASE_2) {
+        if (context.getCurrentPhase().ordinal() >= Phase.PHASE_2.ordinal()) {
             updateStopLoss(context, context.getBasePrice());
         }
     }

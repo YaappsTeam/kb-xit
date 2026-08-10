@@ -37,6 +37,28 @@ $env:TELEGRAM_CHAT_ID = "your-telegram-chat-id-here"
 # runtime with /risk <amount> or /risk off.
 # $env:MAX_RISK_PER_TRADE = "5000"
 
+# Close intraday positions at this wall-clock time, before your broker
+# squares them off at whatever price it gets. Unset = no end-of-day
+# close. The zone defaults to the market's (Asia/Kolkata), not the
+# machine's -- a VM on UTC would otherwise fire hours late.
+# $env:EOD_EXIT_TIME = "15:15"
+# $env:EOD_TIMEZONE = "Asia/Kolkata"
+
+# DANGER: when true, exits place REAL SELL orders with your broker.
+# Off by default and never implied by any other setting. Also needs a
+# /token each day and a registered static IP -- Upstox refuses orders
+# from anywhere else, however valid the token is.
+# $env:PLACE_REAL_ORDERS = "true"
+# $env:ORDER_PRODUCT = "I"   # I = intraday, D = delivery
+
+# Watch your broker's order stream, so a buy punched into the Upstox app
+# turns up here without being typed in again. Detected positions are
+# offered, never taken: the stream carries the whole account, including
+# hedges and other strategies, and managing those uninvited would apply
+# exit rules never meant for them. Accept with the button or /adopt.
+# Needs a /token before the stream can start.
+# $env:WATCH_BROKER_FILLS = "true"
+
 # Newest by write time, not first alphabetically: after a version bump
 # target/ can hold jars from several versions (plus the shade plugin's
 # -shaded copy), and picking alphabetically silently runs a stale build.

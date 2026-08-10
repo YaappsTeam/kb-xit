@@ -4,7 +4,7 @@ A trade exit management system: you tell it you're in a trade, it watches the li
 
 **It never places a buy order.** Every position it manages was bought elsewhere and handed to it — so it can also be handed back, without closing anything.
 
-Right now the runnable mode is **paper trading**, on either a simulated price feed or **real Upstox market data**. You declare a trade via Telegram, the engine watches the price and manages the exit, and every figure it reports is **net of brokerage and taxes**. Real sell-order placement is on the roadmap; see [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+Right now the runnable mode is **paper trading**, on either a simulated price feed or **real Upstox market data**. You declare a trade via Telegram, the engine watches the price and manages the exit, and every figure it reports is **net of brokerage and taxes**. Real sell orders are written but off by default — see [Placing real sell orders](#placing-real-sell-orders) for what turning them on requires.
 
 ## Prerequisites
 
@@ -96,7 +96,7 @@ This needs an Upstox **Analytics Token**, which is not the same as the standard 
 | Market data + WebSocket streaming | ✅ (no static IP needed) | ✅ |
 | Placing/modifying orders | ❌ read-only | ✅ |
 
-Live prices only ever need the first one — so live-data mode involves **no daily login**, and the token it uses physically cannot place an order. The daily token and the [static-IP registration](PRODUCT_REQUIREMENTS.md) come in later, with live order placement (Phase 3).
+Live prices only ever need the first one — so live-data mode involves **no daily login**, and the token it uses physically cannot place an order. The daily token and a registered static IP are needed only for the things that touch your account: placing orders, and checking positions.
 
 Add to your `run.ps1` / `run.sh`:
 
@@ -258,9 +258,91 @@ Selection rules:
 - **You cannot switch while a trade is open.** Open trades keep the set they were opened with, so switching mid-flight would make "active" mean something other than what is managing your position. Exit first, then choose.
 - Numbers live in `MilestoneLadder` — changing them is a code change, deliberately, since they encode trading intent worth reviewing in a diff. Only the *choice* is a runtime decision.
 
+## End-of-day close
+
+Set `EOD_EXIT_TIME` (e.g. `15:15`) and open trades are closed out at that wall-clock time, before your broker squares them off at whatever price it gets. Unset, nothing happens — closing positions on a clock has real consequences, so it's opted into rather than assumed.
+
+`EOD_TIMEZONE` defaults to **`Asia/Kolkata`**, deliberately not the machine's zone: a VM on UTC would otherwise fire five and a half hours late, well after the broker had already acted.
+
+- **`MANAGED` trades are closed**, moved to `PHASE_4`, and settled with real exit-price charges.
+- **`OBSERVED` trades are not.** That mode means you took the trigger back, so you get a warning to close it yourself rather than a silent sale.
+- **`RELEASED` trades are left alone entirely.**
+
+The schedule runs on its own clock rather than off price ticks — a tick-driven check wouldn't fire when the feed is dead or the instrument is quiet, which is exactly when an unattended position most needs closing. Starting the app after the cutoff won't retroactively square anything off.
+
+## The daily order token
+
+Market data uses the year-long Analytics Token and needs nothing daily. **Placing orders is different**: it needs the standard Upstox access token, which dies at **3:30 AM** and can only be obtained through an interactive browser login with 2FA. That can't be automated, so it's supplied at runtime:
+
+```
+/token <value>     # after logging in to Upstox
+/token             # shows status, never the token itself
+```
+
+The token is never logged, never persisted, and never echoed back — not even partially. **The message you send it in is deleted automatically**, because a credential pasted into chat otherwise stays in the history on both devices and on Telegram's servers. That's best-effort (Telegram refuses deletions older than 48 hours), so you're also reminded to check.
+
+Expiry follows Upstox's rule rather than a 24-hour timer: the token expires at the **first 3:30 AM after it was supplied**. One taken at 09:00 lasts until the next morning; one taken at 02:00 has ninety minutes left.
+
+⚠ **Order placement also requires a registered static IP** (SEBI's algo-trading rules). A home connection won't do — the address changes, and re-registering is rate-limited to once a week and invalidates your token each time. Until this runs somewhere with a fixed address, order placement will be refused by Upstox with `UDAPI1221` however valid your token is.
+
+## Placing real sell orders
+
+Off unless `PLACE_REAL_ORDERS=true`. Nothing else implies it — not `MARKET_DATA=live`, not a valid token — because the difference is real money.
+
+It also needs a `/token` for the day and a **registered static IP**. Without the IP, Upstox refuses with `UDAPI1221` and the app says so in those terms, since the message it returns doesn't make clear it's a hosting problem rather than a bad token.
+
+Exits are placed as **MARKET** orders. The decision to be out has already been taken by then, and a limit that doesn't fill leaves the position open with the stop already breached. The cost is slippage, which on a thin option can be material.
+
+Three outcomes, and they're treated differently on purpose:
+
+| Outcome | What happens |
+|---|---|
+| **Accepted** | Trade closes, feed stops, settled P&L reported |
+| **Rejected** (4xx) | Position is still open, so the trade stays managed and a stop-loss exit retries next tick |
+| **Unknown** (timeout, 5xx) | Nothing further is placed. The trade switches to `OBSERVED` and you're told to check your broker |
+
+That last row is the important one. A timeout is **not** a rejection — the order may be resting at the exchange. Retrying it could sell a position that's already gone and leave you **short**, turning a finished trade into a new unmanaged one in the opposite direction. So the order id is claimed *before* the request is sent, and a second exit for the same trade is refused outright.
+
+## Surviving a restart
+
+The position doesn't disappear when the process does. Open trades are written to `~/.xit-mc/open-trades.json` (override with `TRADE_STATE_FILE`) whenever something material changes — a new trade, the stop ratcheting, a phase advancing, a milestone crossing, a mode change, a close — and restored on the next start.
+
+What's restored matters more than that it is:
+
+- **The ratcheted stop, as-is.** It may have been tightened far above the hard stop over the life of the trade; recomputing it would silently hand that protection back.
+- **The milestone index**, so thresholds already reported don't all fire again on the first tick back.
+- Phase, cost-inclusive breakeven, monitoring mode, and the milestone set the trade was opened with.
+
+The file is written to a temp file and moved into place, so a crash mid-write can't leave something unparseable. A corrupt or missing file means starting with no trades rather than refusing to start — with nothing watching the positions, failing to start is the worse outcome.
+
+On resume you get a summary and a warning: a position closed by hand while the process was down is resumed here regardless. Send a `/token` and that gets checked automatically — see below.
+
+## Checking against your broker
+
+`/positions` asks Upstox what's actually open and compares it with what's being managed here. It runs automatically the moment you send a `/token` and there are open trades, since that's the first point at which the broker can be asked anything.
+
+Three answers:
+
+| | What it means | What happens |
+|---|---|---|
+| **Confirmed** | Broker agrees | Nothing; carry on |
+| **Gone / reduced** | Broker holds less than this system thinks, or nothing | The trade is stood down to `OBSERVED` |
+| **Untracked** | Broker holds something this system isn't watching | Offered for adoption, same buttons as a detected fill |
+
+**A discrepancy stops the engine acting, and nothing more.** It's never dropped. Acting is what makes a stale trade dangerous: an exit sized from a position that has shrunk sells quantity that isn't there, and selling past flat opens a short — the exit engine opening a trade, which is exactly what it must never do. But the broker can be the one that's wrong (a settled delivery holding, a bad minute at the API), and dropping the trade would be unrecoverable while standing down isn't. You get `/manage <orderId>` to hand it back or `/release <orderId>` to drop it.
+
+If the check itself fails, **nothing changes** and it says so. An error read as "the broker holds nothing" would stand down every open trade at once.
+
+Two things worth knowing:
+
+- It reads *today's positions*, not delivery holdings. A position left open overnight in delivery moves out of positions and will be reported as gone — the reason a discrepancy stands a trade down rather than dropping it.
+- The broker reports positions, not orders, so two trades on the same strike are one position to it. A shortfall can't be attributed to one of them, so both stand down.
+
+Untracked positions are how a trade bought *before* the app started gets found: the fill feed only sees fills while it's connected.
+
 ## Taking back control
 
-This app **never places a buy order**. It's purely an exit engine: every position it manages was bought elsewhere and handed to it by `/track`. So it has to be possible to hand one back.
+This app **never places a buy order**. It's purely an exit engine: every position it manages was bought elsewhere and handed to it — by `/track`, or by accepting one it spotted at your broker. So it has to be possible to hand one back.
 
 Sent **without a target**, `/exit`, `/release`, `/observe` and `/manage` reply with a button per open trade — labelled with symbol, entry, current price and mode — so you never retype a generated orderId while a position is moving. Tap one, or use the explicit form when you already know the id.
 
@@ -277,7 +359,32 @@ Sent **without a target**, `/exit`, `/release`, `/observe` and `/manage` reply w
 - **`/manage <orderId>`** — hand it back to the engine.
 - **`/pause` / `/resume`** — control whether *new* trades are adopted. Open trades stay managed, and the reply says so; use `/release all` if you want the engine off everything.
 
-`/pause` matters most for Phase 3. Once the broker fill feed is wired in, it streams fills for the **whole account** — a trade punched into the Upstox app, a position from another strategy — and the engine would start managing positions it was never meant to touch. Until adoption is explicitly opt-in, `/pause` is what stands in the way.
+`/pause` matters most with the broker fill feed on: it stops anything new being offered while you deal with what's already open.
+
+## Positions opened at your broker
+
+`WATCH_BROKER_FILLS=true` connects to Upstox's order stream, so a buy punched into the mobile app turns up here without being typed in again. Off by default; it needs a `/token` before the stream can start, and waits quietly until one arrives.
+
+**Detected positions are offered, never taken.** The stream carries fills for the *whole account* — a leg of a hedge, a position from another strategy, a long-term holding — and managing those uninvited would apply exit rules never meant for them, and, with `PLACE_REAL_ORDERS` on, eventually sell them. So a detected fill arrives as a message with two buttons:
+
+```
+New position detected at your broker: ACC x10 at 100.00 (orderId=order-1).
+It is NOT being managed. Adopt it only if you want this system running
+its exit rules on it.
+[ Manage the exit of this ]  [ Leave it alone ]
+```
+
+- **Manage the exit of this** — adopted exactly as if you'd sent `/track`: breakeven, ladder, stop, the lot.
+- **Leave it alone** — not offered again. A reconnect replays fills; something you've already declined shouldn't come back each time.
+
+Neither answer touches the position. Declining doesn't sell it and doesn't stop it existing — it only means this app won't watch it.
+
+| Command | |
+|---|---|
+| `/adopt` | List everything waiting, as buttons |
+| `/adopt <orderId>` | Accept one directly |
+
+While `/pause` is on you're still told about detected positions, but accepting one is refused and the offer stays waiting — so nothing is taken on behind a pause, and nothing is lost either. Offers live in memory only: a restart clears what was waiting, while trades you actually adopted are restored like any other (see *Surviving a restart*).
 
 ## Setting up your Telegram bot
 
@@ -292,10 +399,13 @@ Sent **without a target**, `/exit`, `/release`, `/observe` and `/manage` reply w
    observe - Keep the alerts, stop automatic exits (position stays open)
    release - Stop watching entirely; position stays open
    manage - Hand a trade back to the engine
+   adopt - Take on a position detected at your broker
+   positions - Check what is managed here against what your broker holds
    pause - Stop taking on new trades
    resume - Resume taking on new trades
    risk - Rupees a trade may lose at its stop: /risk <amount> or /risk off
    ladder - Choose the active milestone set
+   token - Supply the daily order token; bare shows its status
    refresh - Re-fetch the instrument master now
    help - Show every command
    ```
@@ -321,6 +431,11 @@ Sent **without a target**, `/exit`, `/release`, `/observe` and `/manage` reply w
 | `/ladder <name>` | Select a set directly, skipping the buttons |
 | `/risk` | Show the current per-trade risk ceiling |
 | `/risk <amount>` / `/risk off` | Set or remove it, applying to trades opened afterwards |
+| `/positions` | Check what is managed here against what your broker actually holds |
+| `/adopt` | Show positions detected at your broker as buttons, and take one on |
+| `/adopt <orderId>` | Accept one directly, skipping the buttons |
+| `/token` | Show whether a usable order token is held (never shows the token) |
+| `/token <value>` | Supply the daily order-placement token |
 | `/help` | Show every command. `/start` shows the same |
 
 Anything else starting with `/` gets an "unknown command" reply pointing at `/help`. That's deliberate: a mistyped command that silently did nothing would leave you believing a position was being watched when it wasn't. Ordinary chat is ignored, so the bot only answers command-shaped input.

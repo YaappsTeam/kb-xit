@@ -4,16 +4,26 @@ import com.kbquants.instrument.InstrumentAwareTrackRequestResolver;
 import com.kbquants.instrument.InstrumentCatalog;
 import com.kbquants.instrument.InstrumentMasterLoader;
 import com.kbquants.instrument.PositionSizer;
+import com.kbquants.live.EndOfDaySchedule;
 import com.kbquants.live.TradeMonitor;
 import com.kbquants.live.UpstoxDataCredentials;
 import com.kbquants.live.UpstoxMarketDataFeed;
 import com.kbquants.domain.ActiveLadder;
 import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.RiskSettings;
+import com.kbquants.domain.TradingToken;
 import com.kbquants.live.UpstoxChargesService;
+import com.kbquants.live.UpstoxExitOrderPlacer;
+import com.kbquants.live.UpstoxOrderFillFeed;
+import com.kbquants.live.UpstoxPositionQuery;
+import com.kbquants.session.PositionQuery;
 import com.kbquants.live.UpstoxQuoteService;
 import com.kbquants.session.ChargesService;
 import com.kbquants.session.EstimatedChargesService;
+import com.kbquants.session.ExitOrderPlacer;
+import com.kbquants.session.JsonTradeStore;
+import com.kbquants.session.PaperExitOrderPlacer;
+import com.kbquants.session.TradeStore;
 import com.kbquants.notification.TelegramCommandHandler;
 import com.kbquants.notification.TelegramCredentials;
 import com.kbquants.notification.TelegramNotifier;
@@ -21,11 +31,14 @@ import com.kbquants.session.TrackRequestResolver;
 import com.kbquants.session.LiteralTrackRequestResolver;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.NoOpOrderFillFeed;
+import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.SimulatedMarketDataFeed;
 import com.kbquants.session.TradeFillEvent;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -100,8 +113,50 @@ public class Main {
             chargesService = new EstimatedChargesService();
         }
 
-        TradeMonitor tradeMonitor = new TradeMonitor(new NoOpOrderFillFeed(), feedFactory, notifier,
-                trackRequestResolver, activeLadder, chargesService, riskSettings);
+        // Open trades are written to disk and restored on the next start.
+        // The position does not disappear when the process does, so losing
+        // the entry, breakeven, phase and ratcheted stop would leave it
+        // open at the broker with nothing watching it.
+        TradeStore tradeStore = new JsonTradeStore();
+
+        // Supplied at runtime via /token, because the daily Upstox login is
+        // interactive and cannot be automated.
+        TradingToken tradingToken = new TradingToken(ZoneId.of("Asia/Kolkata"));
+
+        // The only object in the system that can sell anything. Off unless
+        // PLACE_REAL_ORDERS is explicitly enabled -- the difference between
+        // this and the paper placer is real money, so it is never the
+        // default and never implied by another setting.
+        ExitOrderPlacer exitOrderPlacer = exitOrderPlacer(tradingToken);
+
+        // The broker's order stream carries fills for the whole account, so
+        // it is only ever paired with explicit adoption -- the two are set
+        // together here so neither can be enabled without the other.
+        boolean watchBrokerFills = Boolean.parseBoolean(
+                System.getenv().getOrDefault("WATCH_BROKER_FILLS", "false"));
+
+        OrderFillFeed orderFillFeed = watchBrokerFills
+                ? new UpstoxOrderFillFeed(tradingToken)
+                : new NoOpOrderFillFeed();
+
+        if (watchBrokerFills) {
+            log.info("WATCH_BROKER_FILLS is on — positions opened at your broker will be offered for adoption. "
+                    + "Nothing is managed until you accept it. Needs a /token before the stream can start.");
+        }
+
+        // Only ever asked once a /token arrives; without one it reports
+        // itself unavailable rather than answering "nothing is open",
+        // which would flag every managed trade as gone.
+        PositionQuery positionQuery = new UpstoxPositionQuery(tradingToken);
+
+        TradeMonitor tradeMonitor = new TradeMonitor(orderFillFeed, feedFactory, notifier,
+                trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore, exitOrderPlacer,
+                tradingToken, watchBrokerFills, positionQuery);
+
+        EndOfDaySchedule endOfDay = endOfDaySchedule(tradeMonitor);
+        if (endOfDay != null) {
+            endOfDay.start();
+        }
 
         TelegramCommandHandler commandHandler = new TelegramCommandHandler(credentials, tradeMonitor);
         commandHandler.start();
@@ -160,6 +215,51 @@ public class Main {
                     (int) (MilestoneLadder.optionsLadder().getHardStopPercent() * 100));
         }
         return value;
+    }
+
+    /**
+     * Off unless EOD_EXIT_TIME is set. Closing positions on a clock is a
+     * decision with real consequences, so it is opted into rather than
+     * assumed -- and a wrong or misread time would square off a position
+     * hours early.
+     * <p>
+     * The zone defaults to the market's, not the machine's: a VM on UTC
+     * would otherwise fire five and a half hours late, well after the
+     * broker had already squared the position off itself.
+     */
+    private static EndOfDaySchedule endOfDaySchedule(TradeMonitor tradeMonitor) {
+
+        String configured = System.getenv("EOD_EXIT_TIME");
+        if (configured == null || configured.isBlank()) {
+            log.info("EOD_EXIT_TIME is not set — no end-of-day close; your broker will square off intraday "
+                    + "positions on its own terms.");
+            return null;
+        }
+
+        LocalTime cutoff = LocalTime.parse(configured.trim());
+        ZoneId zone = ZoneId.of(System.getenv().getOrDefault("EOD_TIMEZONE", "Asia/Kolkata"));
+
+        return new EndOfDaySchedule(cutoff, zone, tradeMonitor::onEndOfDay);
+    }
+
+    /**
+     * Real orders require an explicit opt-in, a usable daily token and a
+     * registered static IP. Only the first is a code concern; the flag
+     * exists so that nothing else -- MARKET_DATA=live in particular -- can
+     * imply permission to sell.
+     */
+    private static ExitOrderPlacer exitOrderPlacer(TradingToken tradingToken) {
+
+        if (!Boolean.parseBoolean(System.getenv().getOrDefault("PLACE_REAL_ORDERS", "false"))) {
+            log.info("PLACE_REAL_ORDERS is off — exits are recorded and reported, no broker order is placed.");
+            return new PaperExitOrderPlacer();
+        }
+
+        String product = System.getenv().getOrDefault("ORDER_PRODUCT", "I");
+        log.warn("PLACE_REAL_ORDERS is ON — exits will place REAL SELL orders (product={}). "
+                + "This needs a /token each day and a registered static IP.", product);
+
+        return new UpstoxExitOrderPlacer(tradingToken, product);
     }
 
     private static MarketDataFeed simulatedFeed(TradeFillEvent fill) {

@@ -245,4 +245,68 @@ class TradeMonitorControlTest {
         assertTrue(f.notifier().last().contains("OBSERVED"), f.notifier().last());
         assertTrue(f.notifier().last().contains("adoption paused"), f.notifier().last());
     }
+
+    /**
+     * The end-of-day close exists so intraday positions are not left for
+     * the broker to square off at whatever price it gets.
+     */
+    @Test
+    void endOfDayShouldCloseManagedTrades() {
+
+        Fixture f = fixture();
+        open(f);
+        f.feed().listener.onPrice(105.0, 1L);
+        f.notifier().messages.clear();
+
+        f.monitor().onEndOfDay();
+
+        assertTrue(f.notifier().anyContains("end-of-day exit"));
+        f.monitor().onStatusRequested();
+        assertTrue(f.notifier().last().contains("No active trades"));
+    }
+
+    /**
+     * OBSERVED means the user took the trigger back. Silently selling a
+     * position someone explicitly took manual control of is the one thing
+     * that mode promises not to do, so it is told instead.
+     */
+    @Test
+    void endOfDayShouldWarnRatherThanSellAnObservedTrade() {
+
+        Fixture f = fixture();
+        open(f);
+        f.monitor().onMonitorModeRequested("order-1", MonitorMode.OBSERVED);
+        f.notifier().messages.clear();
+
+        f.monitor().onEndOfDay();
+
+        assertTrue(f.notifier().anyContains("only being observed"));
+        assertFalse(f.notifier().anyContains("end-of-day exit"));
+
+        f.monitor().onStatusRequested();
+        assertTrue(f.notifier().last().contains("order-1"), "position should still be open");
+    }
+
+    @Test
+    void endOfDayShouldLeaveReleasedTradesAlone() {
+
+        Fixture f = fixture();
+        open(f);
+        f.monitor().onMonitorModeRequested("order-1", MonitorMode.RELEASED);
+        f.notifier().messages.clear();
+
+        f.monitor().onEndOfDay();
+
+        assertTrue(f.notifier().messages.isEmpty(), () -> f.notifier().messages.toString());
+    }
+
+    @Test
+    void endOfDayShouldDoNothingWithNoOpenTrades() {
+
+        Fixture f = fixture();
+
+        f.monitor().onEndOfDay();
+
+        assertTrue(f.notifier().messages.isEmpty());
+    }
 }

@@ -16,7 +16,6 @@ public class JsonReportFormatter {
             TradeMetrics m = result.getTradeMetricsList().get(i);
 
             sb.append("{")
-                    .append("\"exitModel\":\"").append(m.getExitModel()).append("\",")
                     .append("\"ownershipMode\":\"").append(m.getOwnershipMode()).append("\",")
                     .append("\"finalStopLoss\":").append(m.getFinalStopLoss()).append(",")
                     .append("\"phase\":\"").append(m.getFinalPhase()).append("\",")

@@ -18,17 +18,36 @@ public class PhaseManager {
         this.phase3TriggerFraction = ladder.phaseTriggerFraction(Phase.PHASE_3);
     }
 
+    /**
+     * Applies every transition the price qualifies for, not just the next
+     * one.
+     * <p>
+     * A single switch advanced one phase per tick, so a price gapping
+     * through both thresholds sat in PHASE_2 until another tick arrived --
+     * and since ownership locking is PHASE_3-only, the lock was missed for
+     * exactly the tick where a violent move made it most valuable. It also
+     * contradicted PRODUCT_REQUIREMENTS F4, which requires all intermediate
+     * transitions to apply.
+     * <p>
+     * The loop terminates because transitions only ever move forward and
+     * PHASE_3 has no handler.
+     */
     public void evaluatePhaseTransition(double currentPrice, TradeContext context) {
 
-        switch (context.getCurrentPhase()) {
+        Phase before;
+        do {
+            before = context.getCurrentPhase();
 
-            case PHASE_1 -> handlePhase1(currentPrice, context);
+            switch (before) {
 
-            case PHASE_2 -> handlePhase2(currentPrice, context);
+                case PHASE_1 -> handlePhase1(currentPrice, context);
 
-            default -> {
+                case PHASE_2 -> handlePhase2(currentPrice, context);
+
+                default -> {
+                }
             }
-        }
+        } while (context.getCurrentPhase() != before);
     }
 
     /**

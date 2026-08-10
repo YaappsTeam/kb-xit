@@ -1,7 +1,7 @@
 package com.kbquants.simulation.runner;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import lombok.extern.slf4j.Slf4j;
 
@@ -14,7 +14,7 @@ import java.util.concurrent.*;
  * Parallel implementation of CombinationExecutor.
  * <p>
  * Responsibilities:
- * - Execute ExitModel × OwnershipMode combinations in parallel.
+ * - Execute each OwnershipMode in parallel.
  * - Ensure isolation of TradeContext per combination.
  * - Preserve deterministic result ordering.
  * <p>
@@ -41,19 +41,17 @@ public class ParallelCombinationExecutor implements CombinationExecutor {
 
         List<Callable<TradeMetrics>> tasks = new ArrayList<>();
 
-        for (ExitModel exitModel : request.getExitModels()) {
-            for (OwnershipMode ownershipMode : request.getOwnershipModes()) {
+        for (OwnershipMode ownershipMode : request.getOwnershipModes()) {
 
-                tasks.add(() -> {
-                    SequentialCombinationExecutor sequential = new SequentialCombinationExecutor();
+            tasks.add(() -> {
+                SequentialCombinationExecutor sequential = new SequentialCombinationExecutor();
 
-                    // Reuse internal logic for single combination
-                    return sequential.execute(pricePath, new SimulationRequest(request.getMarketRegime(), request.getScenarioConfig(),
-                                    List.of(exitModel), List.of(ownershipMode), ExecutionMode.SEQUENTIAL))
-                            .getTradeMetricsList()
-                            .get(0);
-                });
-            }
+                // Reuse internal logic for single combination
+                return sequential.execute(pricePath, new SimulationRequest(request.getMarketRegime(),
+                                request.getScenarioConfig(), List.of(ownershipMode), ExecutionMode.SEQUENTIAL))
+                        .getTradeMetricsList()
+                        .get(0);
+            });
         }
 
         List<TradeMetrics> results = new ArrayList<>();

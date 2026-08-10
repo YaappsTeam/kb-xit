@@ -42,6 +42,10 @@ public class TelegramCommandHandler {
     public static final String OBSERVE_CALLBACK_PREFIX = "observe:";
     public static final String MANAGE_CALLBACK_PREFIX = "manage:";
 
+    /** Prefixes for accepting or declining a position detected at the broker. */
+    public static final String ADOPT_CALLBACK_PREFIX = "adopt:";
+    public static final String IGNORE_CALLBACK_PREFIX = "ignore:";
+
     /**
      * Telegram rejects callback_data beyond 64 bytes. Generated orderIds
      * ("telegram-" plus a UUID) leave comfortable room, but a broker id
@@ -82,6 +86,9 @@ public class TelegramCommandHandler {
             "/ladder [name] — choose the milestone set; bare shows buttons",
             "/risk [amount|off] — rupees a trade may lose at its stop; bare shows the current setting",
             "/refresh — re-fetch the instrument master now",
+            "/token [value] — supply the daily order-placement token; bare shows its status",
+            "/adopt [orderId] — take on a position detected at your broker; bare lists them",
+            "/positions — check what is managed here against what your broker holds",
             "/help — this message",
             "",
             "Every percentage reported is net of brokerage and taxes.");
@@ -161,6 +168,14 @@ public class TelegramCommandHandler {
 
             if (update.message != null) {
                 dispatch(update.message.text, listener);
+
+                // A token pasted into chat stays in the history on both
+                // devices and on Telegram's servers. Deleting it is the
+                // only thing that limits the exposure, and it has to
+                // happen whether or not the command parsed.
+                if (carriesASecret(update.message.text)) {
+                    deleteMessage(update.message.message_id);
+                }
             }
 
             if (update.callback_query != null) {
@@ -170,6 +185,37 @@ public class TelegramCommandHandler {
                 acknowledgeCallback(update.callback_query.id);
                 dispatchCallback(update.callback_query.data, listener);
             }
+        }
+    }
+
+    /** True for commands whose text contains a live credential. */
+    static boolean carriesASecret(String text) {
+        return text != null && text.trim().toLowerCase().startsWith("/token ");
+    }
+
+    /**
+     * Best effort. Telegram refuses deletions older than 48 hours and in
+     * some chat types, so the user is separately told to delete it -- this
+     * reduces the window, it does not guarantee removal.
+     */
+    private void deleteMessage(Long messageId) {
+        if (messageId == null) {
+            return;
+        }
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(API_BASE + "/bot" + credentials.getBotToken()
+                            + "/deleteMessage?chat_id=" + URLEncoder.encode(credentials.getChatId(), StandardCharsets.UTF_8)
+                            + "&message_id=" + messageId))
+                    .timeout(Duration.ofSeconds(10))
+                    .GET()
+                    .build();
+            httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+            log.info("Deleted a message carrying a credential");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn("Could not delete the message carrying a credential: {}", e.getMessage());
         }
     }
 
@@ -214,6 +260,9 @@ public class TelegramCommandHandler {
             case "/refresh" -> listener.onRefreshInstruments();
             case "/ladder" -> dispatchLadder(parts, listener);
             case "/risk" -> dispatchRisk(parts, text, listener);
+            case "/token" -> dispatchToken(parts, listener);
+            case "/adopt" -> dispatchAdopt(parts, listener);
+            case "/positions" -> listener.onReconcileRequested();
             case "/pause" -> listener.onAdoptionPaused(true);
             case "/resume" -> listener.onAdoptionPaused(false);
             case "/release" -> dispatchMode(parts, rawText(text), MonitorMode.RELEASED, listener);
@@ -263,6 +312,26 @@ public class TelegramCommandHandler {
 
     private static String rawText(String text) {
         return text;
+    }
+
+    /**
+     * Bare "/token" reports status; "/token <value>" supplies one.
+     * <p>
+     * The raw text is deliberately not passed anywhere that logs it, and
+     * the surrounding code never includes it in a warning -- a rejected
+     * command elsewhere echoes what was typed, which for this command
+     * would print a live credential into the log.
+     */
+    private static void dispatchToken(String[] parts, TelegramCommandListener listener) {
+        if (parts.length == 1) {
+            listener.onTokenStatusRequested();
+            return;
+        }
+        if (parts.length != 2) {
+            listener.onMalformedCommand("/token", "/token <value> (one word, no spaces)");
+            return;
+        }
+        listener.onTokenProvided(parts[1]);
     }
 
     /**
@@ -348,6 +417,17 @@ public class TelegramCommandHandler {
         }
     }
 
+    /** Bare "/adopt" lists what is waiting; with an id it takes that one on. */
+    private static void dispatchAdopt(String[] parts, TelegramCommandListener listener) {
+        if (parts.length == 1) {
+            listener.onPendingAdoptionsRequested();
+        } else if (parts.length == 2) {
+            listener.onAdoptRequested(parts[1]);
+        } else {
+            listener.onMalformedCommand("/adopt", "/adopt <orderId>");
+        }
+    }
+
     /**
      * A tapped inline-keyboard button arrives as a callback_query rather
      * than a message, carrying the token that was attached to the button.
@@ -364,6 +444,10 @@ public class TelegramCommandHandler {
             listener.onMonitorModeRequested(data.substring(RELEASE_CALLBACK_PREFIX.length()), MonitorMode.RELEASED);
         } else if (data.startsWith(OBSERVE_CALLBACK_PREFIX)) {
             listener.onMonitorModeRequested(data.substring(OBSERVE_CALLBACK_PREFIX.length()), MonitorMode.OBSERVED);
+        } else if (data.startsWith(ADOPT_CALLBACK_PREFIX)) {
+            listener.onAdoptRequested(data.substring(ADOPT_CALLBACK_PREFIX.length()));
+        } else if (data.startsWith(IGNORE_CALLBACK_PREFIX)) {
+            listener.onIgnoreRequested(data.substring(IGNORE_CALLBACK_PREFIX.length()));
         } else if (data.startsWith(MANAGE_CALLBACK_PREFIX)) {
             listener.onMonitorModeRequested(data.substring(MANAGE_CALLBACK_PREFIX.length()), MonitorMode.MANAGED);
         } else {
@@ -403,6 +487,7 @@ public class TelegramCommandHandler {
     }
 
     private static final class TelegramMessage {
+        Long message_id;
         String text;
     }
 

@@ -1,7 +1,7 @@
 package com.kbquants.session;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.domain.TradeContext;
@@ -25,7 +25,6 @@ class DeterministicSimulationFeedTest {
                 100.0,
                 101.0,
                 1,
-                ExitModel.MODERATE,
                 OwnershipMode.CONTINUOUS
         );
 

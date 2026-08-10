@@ -1,7 +1,7 @@
 package com.kbquants.simulation.runner;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.simulation.MarketRegime;
 import com.kbquants.simulation.ScenarioConfig;
@@ -32,7 +32,6 @@ public final class SimulationRequest {
 
     private final MarketRegime marketRegime;
     private final ScenarioConfig scenarioConfig;
-    private final List<ExitModel> exitModels;
     private final List<OwnershipMode> ownershipModes;
     private final ExecutionMode executionMode;
 
@@ -41,26 +40,22 @@ public final class SimulationRequest {
      *
      * @param marketRegime   the market regime under which prices will be generated
      * @param scenarioConfig scenario configuration including seed and drift parameters
-     * @param exitModels     list of exit models to evaluate (must not be empty)
      * @param ownershipModes list of ownership strategies to evaluate (must not be empty)
      * @param executionMode  execution strategy (sequential or parallel)
      * @throws NullPointerException     if any required argument is null
-     * @throws IllegalArgumentException if exitModels or ownershipModes are empty
+     * @throws IllegalArgumentException if ownershipModes is empty
      */
-    public SimulationRequest(MarketRegime marketRegime, ScenarioConfig scenarioConfig, List<ExitModel> exitModels,
+    public SimulationRequest(MarketRegime marketRegime, ScenarioConfig scenarioConfig,
                              List<OwnershipMode> ownershipModes, ExecutionMode executionMode) {
 
         this.marketRegime = Objects.requireNonNull(marketRegime, "marketRegime must not be null");
         this.scenarioConfig = Objects.requireNonNull(scenarioConfig, "scenarioConfig must not be null");
         this.executionMode = Objects.requireNonNull(executionMode, "executionMode must not be null");
 
-        Objects.requireNonNull(exitModels, "exitModels must not be null");
         Objects.requireNonNull(ownershipModes, "ownershipModes must not be null");
 
-        if (exitModels.isEmpty()) throw new IllegalArgumentException("exitModels must not be empty");
         if (ownershipModes.isEmpty()) throw new IllegalArgumentException("ownershipModes must not be empty");
 
-        this.exitModels = Collections.unmodifiableList(exitModels);
         this.ownershipModes = Collections.unmodifiableList(ownershipModes);
     }
 }

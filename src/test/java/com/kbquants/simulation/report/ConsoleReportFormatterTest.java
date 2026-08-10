@@ -1,7 +1,7 @@
 package com.kbquants.simulation.report;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.simulation.runner.SimulationResult;
@@ -36,18 +36,16 @@ class ConsoleReportFormatterTest {
 
         String output = formatter.format(result);
 
-        assertTrue(output.contains("ExitModel"));
         assertTrue(output.contains("Ownership"));
         assertTrue(output.contains("FinalSL"));
         assertTrue(output.contains("MFE"));
         assertTrue(output.contains("MAE"));
-        assertTrue(output.contains("MODERATE"));
         assertTrue(output.contains("CONTINUOUS"));
     }
 
     private TradeMetrics createMetrics() {
-        return new TradeMetrics(ExitModel.MODERATE, OwnershipMode.CONTINUOUS,
+        return new TradeMetrics(OwnershipMode.CONTINUOUS,
                 95.0, Phase.PHASE_3, 10.0, -5.0,
-                true, false, false, true);
+                false, true);
     }
 }

@@ -1,7 +1,7 @@
 package com.kbquants.engine;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.domain.TradeContext;
@@ -36,7 +36,6 @@ class MilestoneOwnershipStrategyTest {
                 100.0,     // entry
                 101.0,     // base
                 1,
-                ExitModel.MODERATE,
                 OwnershipMode.MILESTONE
         );
 

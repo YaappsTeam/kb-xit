@@ -80,4 +80,29 @@ public interface TelegramCommandListener {
 
     /** Offer the open trades as buttons for the given monitoring mode. */
     void onMonitorModeChoicesRequested(com.kbquants.domain.MonitorMode mode);
+
+    /** Report whether a usable trading token is held, without revealing it. */
+    void onTokenStatusRequested();
+
+    /**
+     * Supply the daily trading token. The value is a live credential, so
+     * implementations must not log or echo it.
+     */
+    void onTokenProvided(String token);
+
+    /** Take on a detected broker position. */
+    void onAdoptRequested(String orderId);
+
+    /** Decline a detected broker position, permanently. */
+    void onIgnoreRequested(String orderId);
+
+    /** List positions detected at the broker but not managed. */
+    void onPendingAdoptionsRequested();
+
+    /**
+     * Check what is being managed against what the broker actually holds.
+     * A position closed by hand leaves this system watching something that
+     * is not there.
+     */
+    void onReconcileRequested();
 }

@@ -34,6 +34,25 @@ public class ProfitMilestoneTracker {
         this.thresholdsPercent = Objects.requireNonNull(thresholdsPercent, "thresholdsPercent must not be null").clone();
     }
 
+    /**
+     * Resumes a tracker mid-ladder after a restart. Without this, every
+     * milestone the trade had already passed would fire again on the first
+     * tick back -- a burst of notifications announcing profit that was
+     * reported hours ago.
+     */
+    public ProfitMilestoneTracker(double basePrice, MilestoneLadder ladder, int nextThresholdIndex) {
+        this(basePrice, ladder);
+        if (nextThresholdIndex < 0 || nextThresholdIndex > thresholdsPercent.length) {
+            throw new IllegalArgumentException("nextThresholdIndex out of range: " + nextThresholdIndex);
+        }
+        this.nextThresholdIndex = nextThresholdIndex;
+    }
+
+    /** How far up the ladder this trade has already been reported. */
+    public int getNextThresholdIndex() {
+        return nextThresholdIndex;
+    }
+
     public OptionalDouble checkAndAdvance(double currentPrice) {
 
         double profitPercent = (currentPrice - basePrice) / basePrice * 100.0;

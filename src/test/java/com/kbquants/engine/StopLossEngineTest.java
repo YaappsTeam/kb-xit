@@ -1,7 +1,7 @@
 package com.kbquants.engine;
 
 
-import com.kbquants.domain.ExitModel;
+
 import com.kbquants.domain.OwnershipMode;
 import com.kbquants.domain.Phase;
 import com.kbquants.domain.TradeContext;
@@ -34,7 +34,6 @@ class StopLossEngineTest {
                 100.0,     // entry price
                 101.0,     // base price
                 1,
-                ExitModel.MODERATE,
                 OwnershipMode.CONTINUOUS
         );
     }
@@ -120,5 +119,23 @@ class StopLossEngineTest {
         // Hard safety = 80
         // Since 80 < 95, SL must remain 95
         assertEquals(95.0, context.getCurrentStopLoss());
+    }
+
+    /**
+     * Breakeven protection is a floor from PHASE_2 onward, not in PHASE_2
+     * alone. Gated on PHASE_2 exactly, a price gapping straight to PHASE_3
+     * skipped it -- leaving the stop at the hard stop when it should have
+     * been at breakeven.
+     */
+    @Test
+    void baseProtectionShouldStillApplyOnceBeyondPhase2() {
+
+        TradeContext context = new TradeContext(
+                "T1", 100.0, 101.0, 1, OwnershipMode.MILESTONE);
+        context.setCurrentPhase(Phase.PHASE_3);
+
+        new StopLossEngine().applyBaseProtectionIfEligible(context);
+
+        assertEquals(101.0, context.getCurrentStopLoss(), 0.0001);
     }
 }

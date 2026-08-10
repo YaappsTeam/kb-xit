@@ -222,7 +222,7 @@ The engine can be disengaged without closing positions. This matters because the
 ### F6. Simulation and backtesting
 
 - Synthetic price generation (stochastic model with regime bias, pullback, seeded randomness)
-- Batch execution of all ExitModel x OwnershipMode combinations over a shared price path
+- Batch execution of every OwnershipMode over a shared price path
 - Metrics collection: MFE, MAE, final phase, final stop-loss, closure flags
 - Reporting: console table, CSV export, JSON export
 
@@ -296,7 +296,6 @@ No secrets are stored in the repository. All credentials are supplied via enviro
 
 - Replace/augment Telegram alerts with limit/GTT exit orders at milestones
 - Position reconciliation on startup
-- ExitModel behavioral differentiation (Conservative/Moderate/Aggressive)
 
 ### Phase 4 — Production hardening
 
