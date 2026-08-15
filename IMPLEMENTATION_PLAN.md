@@ -352,28 +352,31 @@ One production host and one static IP serve all 10 accounts — Upstox's rule is
 
 **Goal:** collapse the two-repo split into a single source of truth, so future work has one place to be. Timed to sit first in Phase 4 because Phase 4.4 (historical backtest feed) needs `kb-test`'s `market-data-engine` code — pulling it in as a separate merge lets 4.4 be a wiring change rather than a wiring-plus-import change.
 
-See `REPO_STRATEGY.md` for the shape decisions this step executes. Recap: only `market-data-engine/` is imported (the rest of `kb-test` is empty scaffolding for later signal-generation products); the ported code becomes an internal package, not a Maven module; `kb-test` is archived on GitHub afterwards, not deleted.
+See `REPO_STRATEGY.md` for the shape decisions this step executes. Recap: `market-data-engine/` (code) and `docs/` (architectural docs for the future signal-generation products) are both imported; empty module skeletons and the parent multi-module POM are dropped; `AGENTS.md` is folded into `CODING_STANDARDS.md` where relevant and otherwise dropped; `kb-test` is archived on GitHub afterwards, not deleted.
 
 | Sub-step | Detail |
 |---|---|
-| **4.0.a** — filter kb-test | Fresh throwaway clone of `kb-test`; `git filter-repo --path market-data-engine/` to rewrite it down to just that module's history. All other commits/paths (empty modules, `AGENTS.md`, `docs/`) are dropped from the rewritten history. |
-| **4.0.b** — path-rewrite for target layout | In the same filter-repo pass, move `market-data-engine/src/**` to `src/**` (or `src/main/java/com/kbquants/historical/**` — decide during the step, based on how many files retain their `com.kbquants.marketdata.*` package). |
+| **4.0.a** — filter kb-test (code) | Fresh throwaway clone of `kb-test`; `git filter-repo --path market-data-engine/ --path docs/` to rewrite it down to just the module's code + the docs directory. Empty module directories, `AGENTS.md`, `README.md`, and the parent `pom.xml` are dropped from the rewritten history. |
+| **4.0.b** — path-rewrite for target layout | In the same filter-repo pass: `market-data-engine/src/**` → `src/**` (files keep their `com.kbquants.marketdata.*` package during the merge; the interface-collision refactor in 4.0.e is when packages actually change); `docs/**` → `docs/future-products/**`. |
 | **4.0.c** — pom reconciliation preflight | On a scratch branch of `kb-xit`, bump Lombok to `1.18.42` and JUnit to `5.10.2`, add `jackson-databind` (needed by the Upstox candle parser), and run `mvn test` — all **396 existing tests must still pass** before proceeding. `slf4j-api` is already effectively present via Upstox SDK's transitive tree; add explicitly only if the ported code's `LoggerFactory` calls fail to resolve. |
 | **4.0.d** — merge with unrelated histories | `git remote add kb-test-filtered <path>` and `git merge --allow-unrelated-histories kb-test-filtered/mvp1.0/market-data-engine`. Resolve tree-level conflicts (there shouldn't be any if 4.0.b moved files clear of `kb-xit`'s existing paths). |
 | **4.0.e** — reconcile the `MarketDataFeed` collision | The ported `com.kbquants.marketdata.feed.MarketDataFeed` interface is dropped; `UpstoxHistoricalClient` (or its wrapper) is refactored to implement `kb-xit`'s existing `com.kbquants.session.MarketDataFeed` instead. This is where the actual code work lives — everything above is git plumbing. |
 | **4.0.f** — rename the `UpstoxMarketDataFeed` collision | The ported class becomes `UpstoxHistoricalCandleFeed` (or similar); the existing live-tick `UpstoxMarketDataFeed` keeps its name. Update the 17 ported tests accordingly. |
-| **4.0.g** — decide on AGENTS.md | Do not carry `kb-test`'s `AGENTS.md` into `kb-xit`. Anything from it that this codebase actually wants to enforce goes into `CODING_STANDARDS.md`; the rest stays only in the archived `kb-test` repo. |
-| **4.0.h** — verify | `mvn test` — must show **396 (kb-xit) + 17 (ported) = 413 tests passing**, zero failures. Any port that can't pass its own tests unchanged is a signal the interface adaptation in 4.0.e drifted. |
-| **4.0.i** — update planning docs | Mark `REPO_STRATEGY.md` as "merged" instead of "scheduled"; update `DEVELOPMENT.md` §2 to include the new package; update `PRODUCT_REQUIREMENTS.md`'s phase table (Phase 4). |
-| **4.0.j** — archive kb-test on GitHub | Manual action by the repo owner via GitHub settings — not a code change. Its README should point at `kb-xit` (which it already does in the branch pushed alongside this plan). |
+| **4.0.g** — retire AGENTS.md | Do not carry `kb-test`'s `AGENTS.md` across. Read it once during the merge and fold anything this codebase actually wants to enforce (e.g. registry-pattern extensibility, event-driven communication *for future modules*) into `CODING_STANDARDS.md`, scoped to where it applies. Everything left over — the 90%-coverage mandate, the "no if/switch on type" repo-wide rule, the exit-engine-specific invariants that already live in `CODING_STANDARDS.md` in a lighter form — stays only in the archived `kb-test`. |
+| **4.0.h** — label docs/future-products/ | Add a `docs/future-products/README.md` making clear these docs describe **planned** signal-generation products (indicators, strategies, entry engine, scanner, orchestrator) that are **not yet built in this repo** — they're reference material for when that work starts, not documentation of code that exists today. Without this label, a reader lands in `docs/future-products/16_MARKET_DATA_ENGINE.md` and reasonably assumes it describes what's shipping. |
+| **4.0.i** — verify | `mvn test` — must show **396 (kb-xit) + 17 (ported) = 413 tests passing**, zero failures. Any port that can't pass its own tests unchanged is a signal the interface adaptation in 4.0.e drifted. |
+| **4.0.j** — update planning docs | Mark `REPO_STRATEGY.md` as "merged" instead of "scheduled"; update `DEVELOPMENT.md` §2 to include the new package; update `PRODUCT_REQUIREMENTS.md`'s phase table (Phase 4); add `docs/future-products/` to `README.md`'s "Project documentation" table. |
+| **4.0.k** — archive kb-test on GitHub | Manual action by the repo owner via GitHub settings — not a code change. Its README already points at `kb-xit` (pushed on the planning branch alongside this plan). |
 
 **Acceptance criteria (step 4.0 complete when all are true):**
 
-- [ ] `git log --follow` on any file that came from `kb-test`'s `market-data-engine` shows the original commits, authors, and dates back to that repo's history
+- [ ] `git log --follow` on any file that came from `kb-test`'s `market-data-engine` OR `docs/` shows the original commits, authors, and dates back to that repo's history
 - [ ] `mvn test` in `kb-xit` reports 413 tests passing (or exactly the ported count + 396, whichever the filter-repo pass preserved)
 - [ ] Exactly one `MarketDataFeed` interface remains in `kb-xit` (`com.kbquants.session.MarketDataFeed`)
 - [ ] Exactly one class named `UpstoxMarketDataFeed` remains, and it's the live-tick one; the historical implementation is named distinctly
 - [ ] `AGENTS.md` does not exist in `kb-xit`; anything worth keeping from it lives in `CODING_STANDARDS.md`
+- [ ] `docs/future-products/README.md` clearly frames those docs as forward-looking, and no other doc in `kb-xit` references them as if they describe current code
+- [ ] No empty module directories anywhere in `kb-xit` (no `indicators-engine/`, `entry-engine/`, etc. carried across as bare `pom.xml`s)
 - [ ] `kb-test` is archived (read-only) on GitHub
 
 **Rollback:** the merge is a single commit; if anything downstream goes wrong `git revert` on that merge reinstates the pre-merge state without touching the filter-repo scratch clone. `kb-test` on GitHub is not touched until 4.0.j, so it can always be re-cloned and the merge re-attempted.
