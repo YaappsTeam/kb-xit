@@ -1,0 +1,65 @@
+# Copy this file to accounts.properties (already gitignored) and fill in
+# real values for every trader this process should manage.
+#
+# NEVER commit accounts.properties: every field except accountId and
+# defaultMilestoneSetName is a credential or a personal setting.
+#
+# Format:
+#   account.<accountId>.<field>=<value>
+#
+# where <accountId> is a short opaque handle used in logs and trade file
+# names (not shown to the trader). It must be unique. It is NOT a
+# Telegram chat id -- that's a separate field below, and it is what the
+# bot uses to route inbound commands to this account.
+#
+# See IMPLEMENTATION_PLAN.md Phase 3.5 and PRODUCT_REQUIREMENTS.md
+# section F8 for the multi-account isolation model.
+
+
+# ---------- Trader 1 ----------
+
+# Telegram chat id (numeric string). Send /start to @userinfobot in
+# Telegram to see yours. The bot only accepts commands from chat ids
+# listed here; anyone else gets a polite refusal.
+account.alice.telegramChatId=111222333
+
+# Upstox Analytics Token -- year-valid, read-only, used for market data
+# and reconciliation. Generate from Developer Apps -> Analytics tab.
+# Not the same as the daily access token used for order placement:
+# the daily one is supplied at runtime via /token, per account.
+account.alice.upstoxAnalyticsToken=alice-analytics-token-here
+
+# Upstox OAuth app credentials for order placement. Every trader needs
+# their own Upstox developer app registered with the deployment host's
+# static IP (SEBI algo-trading rules -- see README.md).
+account.alice.upstoxApiKey=alice-api-key
+account.alice.upstoxApiSecret=alice-api-secret
+account.alice.upstoxRedirectUri=https://example.com/upstox/callback
+
+# Optional. "true" routes all Upstox calls to the sandbox. Default false.
+# account.alice.upstoxSandbox=false
+
+# Rupees deployed per trade. Required. Used to size /track <symbol>
+# when no explicit quantity is passed.
+account.alice.capitalPerTrade=50000
+
+# Rupees this trader is willing to lose if the hard stop is hit.
+# Optional -- 0 or omitted means "capital alone caps the position",
+# which on the OPTIONS set means a stopped-out trade loses
+# capitalPerTrade * 40%.
+account.alice.maxRiskPerTrade=5000
+
+# Which milestone ladder new trades open with. EQUITY or OPTIONS.
+# Traders can switch via /ladder at runtime; this only sets the default.
+account.alice.defaultMilestoneSetName=EQUITY
+
+
+# ---------- Trader 2 ----------
+
+account.bob.telegramChatId=444555666
+account.bob.upstoxAnalyticsToken=bob-analytics-token-here
+account.bob.upstoxApiKey=bob-api-key
+account.bob.upstoxApiSecret=bob-api-secret
+account.bob.upstoxRedirectUri=https://example.com/upstox/callback
+account.bob.capitalPerTrade=100000
+account.bob.defaultMilestoneSetName=OPTIONS
