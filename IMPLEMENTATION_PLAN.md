@@ -1,6 +1,6 @@
 # xit-mc Implementation Plan
 
-> Version 2.0 — August 2026
+> Version 2.1 — August 2026
 
 Phased roadmap from the current state to a production-ready exit management system. Each step lists concrete deliverables, files affected, and acceptance criteria.
 
@@ -278,7 +278,108 @@ Adding a set is adding a `MilestoneLadder` factory; nothing else is needed.
 
 ---
 
+## Phase 3.5: Multi-account support
+
+**Goal:** Up to 10 traders, each with their own Upstox account and Telegram chat, run on the same process with zero cross-visibility. Every account's trades, stop-losses, risk settings and milestone-set choice are isolated from every other account's.
+
+This phase exists because the product target changed from "one developer-trader" to "up to 10 independent traders" (see PRODUCT_REQUIREMENTS.md §3, F8). It sits before Phase 4 because production hardening (static IP, real-order verification) is only worth doing once against the shape the system will actually run in — verifying single-account behavior and then re-verifying after a multi-account rewrite would duplicate the riskiest work.
+
+**Why this is tractable in one phase:** `TradeMonitor`, `ExitEngine`, `OrderFillFeed`, `MarketDataFeed`, and `ExitOrderPlacer` are already broker-agnostic interfaces with no global/static state (CODING_STANDARDS.md §3, §6). Isolation is achieved by constructing **one full set of these per account**, not by adding account-awareness inside the engine. `ExitEngine`, `PhaseManager`, `StopLossEngine`, and the ownership strategies need zero changes.
+
+### Step 3.5.1 — Account registry
+
+| Item | Detail |
+|---|---|
+| New class | `com.kbquants.domain.TraderAccount` — immutable: `accountId`, `telegramChatId`, Upstox credentials, `capitalPerTrade`, `maxRiskPerTrade`, default milestone set |
+| New class | `com.kbquants.session.AccountRegistry` — loads all configured accounts at startup, indexes by `accountId` and by `telegramChatId` |
+| Storage | A single gitignored config file (e.g. `accounts.yml`, alongside the existing gitignored `run.sh`/`run.ps1` pattern) — 10 known accounts don't warrant a database. One entry per trader, same fields as today's per-process env vars |
+| Validation | Fail fast at startup on a malformed or duplicate `telegramChatId`/`accountId` — better to refuse to start than to silently misroute one trader's trades to another |
+
+**Tests:** `AccountRegistryTest` — load valid config, reject duplicate chat ids, reject duplicate account ids, lookup by either key, missing-file behavior.
+
+### Step 3.5.2 — Per-account TradeMonitor
+
+| Item | Detail |
+|---|---|
+| Refactor | `Main` builds `Map<accountId, TradeMonitor>` from the registry instead of one process-wide `TradeMonitor` |
+| Construction | Each `TradeMonitor` gets its own `OrderFillFeed`, `MarketDataFeed` factory, `ExitOrderPlacer`, `Notifier` (bound to that account's chat id), and `MilestoneLadder`/risk settings — the same constructor `TradeMonitor` already takes today, just called N times instead of once |
+| Isolation guarantee | No shared mutable state between `TradeMonitor` instances — each owns its own `TradeContext` map, per CODING_STANDARDS.md §6 |
+| Fault isolation | A construction or runtime failure in one account's feed must not prevent the others from starting/running — catch and log per account in `Main`, never let one bad registration abort the whole process |
+
+**Tests:** extend `TradeMonitorTest` fakes to confirm two `TradeMonitor` instances sharing no state don't observe each other's fills/ticks (a fill on monitor A's fake feed must not appear in monitor B's trade list).
+
+### Step 3.5.3 — Telegram command routing by chat id
+
+| Item | Detail |
+|---|---|
+| Refactor | `TelegramCommandHandler` already receives `chat.id` on every update (Telegram's `getUpdates` payload) — today it's discarded in favor of the single `TELEGRAM_CHAT_ID` env var. Resolve it against `AccountRegistry` instead |
+| Behavior | Recognised chat id → dispatch to that account's `TradeMonitor`. Unrecognised chat id → fixed "not a registered account" reply, nothing else (no account enumeration, no hint about who *is* registered) |
+| Outbound | `TelegramNotifier` for a given `TradeMonitor` sends only to that account's `telegramChatId`, never the others |
+
+**Tests:** extend `TelegramCommandHandlerTest` — same command text from two different chat ids resolves to two different accounts; unknown chat id gets the refusal and touches no `TradeMonitor`.
+
+### Step 3.5.4 — Per-account persistence
+
+| Item | Detail |
+|---|---|
+| Refactor | `JsonTradeStore` keys its file path (or top-level JSON key) by `accountId` — `~/.xit-mc/open-trades/<accountId>.json` rather than one shared file |
+| Restart behavior | Every account's open trades restore to that account only; a corrupt file for one account must not block the others from loading (same "missing file → start empty, don't refuse to start" principle already applied per-process today) |
+
+**Tests:** extend `TradeMonitorPersistenceTest` — two accounts' trades round-trip independently; a corrupt file for account A doesn't prevent account B's trades from loading.
+
+### Step 3.5.5 — Per-account daily order token
+
+No new code beyond 3.5.3: once `/token` is routed by chat id, it is inherently per-account. Each trader supplies their own daily Upstox token in their own chat; `PLACE_REAL_ORDERS` and reconciliation already read whichever token is attached to the account making the call.
+
+### Step 3.5.6 — Static IP: shared host, per-account registration (operational, not code)
+
+One production host and one static IP serve all 10 accounts — Upstox's rule is about where the order-placement HTTP call originates, not which account it's for. But each of the 10 traders must **individually** register that same IP against their own Upstox developer app (`PUT /user/ip`, using their own token). This is a one-time step per trader to do during onboarding, not a code change.
+
+### Acceptance criteria (Phase 3.5 complete when all are true)
+
+- [ ] 2+ accounts configured with distinct chat ids and credentials, running trades simultaneously
+- [ ] A command sent from account A's chat never reads or changes account B's trades
+- [ ] Each account's persistence file round-trips independently across a restart
+- [ ] A malformed or failing account (bad credentials, feed error) does not prevent other accounts from running
+- [ ] Adding an 11th account is a config-only change — no code, no redeploy of logic
+- [ ] All existing single-account tests still pass unmodified in spirit (ported to construct one account rather than reading process-wide env vars)
+
+---
+
 ## Phase 4: Production hardening
+
+### Step 4.0 — Merge kb-test into this repo (history-preserving)
+
+**Goal:** collapse the two-repo split into a single source of truth, so future work has one place to be. Timed to sit first in Phase 4 because Phase 4.4 (historical backtest feed) needs `kb-test`'s `market-data-engine` code — pulling it in as a separate merge lets 4.4 be a wiring change rather than a wiring-plus-import change.
+
+See `REPO_STRATEGY.md` for the shape decisions this step executes. Recap: `market-data-engine/` (code) and `docs/` (architectural docs for the future signal-generation products) are both imported; empty module skeletons and the parent multi-module POM are dropped; `AGENTS.md` is folded into `CODING_STANDARDS.md` where relevant and otherwise dropped; `kb-test` is archived on GitHub afterwards, not deleted.
+
+| Sub-step | Detail |
+|---|---|
+| **4.0.a** — filter kb-test (code) | Fresh throwaway clone of `kb-test`; `git filter-repo --path market-data-engine/ --path docs/` to rewrite it down to just the module's code + the docs directory. Empty module directories, `AGENTS.md`, `README.md`, and the parent `pom.xml` are dropped from the rewritten history. |
+| **4.0.b** — path-rewrite for target layout | In the same filter-repo pass: `market-data-engine/src/**` → `src/**` (files keep their `com.kbquants.marketdata.*` package during the merge; the interface-collision refactor in 4.0.e is when packages actually change); `docs/**` → `docs/future-products/**`. |
+| **4.0.c** — pom reconciliation preflight | On a scratch branch of `kb-xit`, bump Lombok to `1.18.42` and JUnit to `5.10.2`, add `jackson-databind` (needed by the Upstox candle parser), and run `mvn test` — all **396 existing tests must still pass** before proceeding. `slf4j-api` is already effectively present via Upstox SDK's transitive tree; add explicitly only if the ported code's `LoggerFactory` calls fail to resolve. |
+| **4.0.d** — merge with unrelated histories | `git remote add kb-test-filtered <path>` and `git merge --allow-unrelated-histories kb-test-filtered/mvp1.0/market-data-engine`. Resolve tree-level conflicts (there shouldn't be any if 4.0.b moved files clear of `kb-xit`'s existing paths). |
+| **4.0.e** — reconcile the `MarketDataFeed` collision | The ported `com.kbquants.marketdata.feed.MarketDataFeed` interface is dropped; `UpstoxHistoricalClient` (or its wrapper) is refactored to implement `kb-xit`'s existing `com.kbquants.session.MarketDataFeed` instead. This is where the actual code work lives — everything above is git plumbing. |
+| **4.0.f** — rename the `UpstoxMarketDataFeed` collision | The ported class becomes `UpstoxHistoricalCandleFeed` (or similar); the existing live-tick `UpstoxMarketDataFeed` keeps its name. Update the 17 ported tests accordingly. |
+| **4.0.g** — retire AGENTS.md | Do not carry `kb-test`'s `AGENTS.md` across. Read it once during the merge and fold anything this codebase actually wants to enforce (e.g. registry-pattern extensibility, event-driven communication *for future modules*) into `CODING_STANDARDS.md`, scoped to where it applies. Everything left over — the 90%-coverage mandate, the "no if/switch on type" repo-wide rule, the exit-engine-specific invariants that already live in `CODING_STANDARDS.md` in a lighter form — stays only in the archived `kb-test`. |
+| **4.0.h** — label docs/future-products/ | Add a `docs/future-products/README.md` making clear these docs describe **planned** signal-generation products (indicators, strategies, entry engine, scanner, orchestrator) that are **not yet built in this repo** — they're reference material for when that work starts, not documentation of code that exists today. Without this label, a reader lands in `docs/future-products/16_MARKET_DATA_ENGINE.md` and reasonably assumes it describes what's shipping. |
+| **4.0.i** — verify | `mvn test` — must show **396 (kb-xit) + 17 (ported) = 413 tests passing**, zero failures. Any port that can't pass its own tests unchanged is a signal the interface adaptation in 4.0.e drifted. |
+| **4.0.j** — update planning docs | Mark `REPO_STRATEGY.md` as "merged" instead of "scheduled"; update `DEVELOPMENT.md` §2 to include the new package; update `PRODUCT_REQUIREMENTS.md`'s phase table (Phase 4); add `docs/future-products/` to `README.md`'s "Project documentation" table. |
+| **4.0.k** — archive kb-test on GitHub | Manual action by the repo owner via GitHub settings — not a code change. Its README already points at `kb-xit` (pushed on the planning branch alongside this plan). |
+
+**Acceptance criteria (step 4.0 complete when all are true):**
+
+- [ ] `git log --follow` on any file that came from `kb-test`'s `market-data-engine` OR `docs/` shows the original commits, authors, and dates back to that repo's history
+- [ ] `mvn test` in `kb-xit` reports 413 tests passing (or exactly the ported count + 396, whichever the filter-repo pass preserved)
+- [ ] Exactly one `MarketDataFeed` interface remains in `kb-xit` (`com.kbquants.session.MarketDataFeed`)
+- [ ] Exactly one class named `UpstoxMarketDataFeed` remains, and it's the live-tick one; the historical implementation is named distinctly
+- [ ] `AGENTS.md` does not exist in `kb-xit`; anything worth keeping from it lives in `CODING_STANDARDS.md`
+- [ ] `docs/future-products/README.md` clearly frames those docs as forward-looking, and no other doc in `kb-xit` references them as if they describe current code
+- [ ] No empty module directories anywhere in `kb-xit` (no `indicators-engine/`, `entry-engine/`, etc. carried across as bare `pom.xml`s)
+- [ ] `kb-test` is archived (read-only) on GitHub
+
+**Rollback:** the merge is a single commit; if anything downstream goes wrong `git revert` on that merge reinstates the pre-merge state without touching the filter-repo scratch clone. `kb-test` on GitHub is not touched until 4.0.j, so it can always be re-cloned and the merge re-attempted.
 
 ### Step 4.1 — External configuration (YAML)
 
