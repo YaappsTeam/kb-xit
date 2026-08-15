@@ -1,49 +1,81 @@
 # Repo strategy: kb-xit vs. kb-test
 
-> Added August 2026, after several weeks of parallel/unclear work across both repos.
+> Added August 2026. Confirmed as a merge (not a park) later that month.
 
 ## Decision
 
-**`kb-xit` is the product.** This repo is the exit-management application described in
-`PRODUCT_REQUIREMENTS.md` — it is the thing that goes to production for real traders. All
-active development happens here.
+**One repo going forward: `kb-xit`.** It reached a working, tested exit-management app
+(396 tests, live Upstox market data, real order-placement code) while `kb-test` stayed at
+mostly-empty scaffolding. All active development happens here; `kb-test` will be merged into
+this repo and then archived.
 
-**`kb-test` is parked**, not deleted. It holds two different things that got mixed together:
+The merge is **scheduled with Phase 4** in `IMPLEMENTATION_PLAN.md` — see step 4.0 there —
+so it lands exactly when the ported code (`market-data-engine`) is needed for the historical
+backtest feed, not before, and doesn't add build risk to the Phase 3.5 multi-account work
+that actually blocks going to production.
 
-1. One genuinely useful, tested module: `market-data-engine` (Upstox historical-candle
-   fetching, timeframe aggregation). This is a real candidate to port into `kb-xit` when
-   Phase 4 needs a `HistoricalDataFeed` for backtesting against real historical data
-   (IMPLEMENTATION_PLAN.md, Phase 4). Not urgent — nothing in the path to production depends
-   on it.
-2. Nine empty module skeletons (`indicators-engine`, `strategy-composition`, `entry-engine`,
-   `scanner-engine`, `trade-lifecycle`, `execution-infrastructure`, `orchestrator-core`,
-   `trading-domain`, `app-runner`) plus an extensive, strict architecture spec (`AGENTS.md`,
-   `docs/`). These describe **signal generation and full-pipeline automation** — a different
-   product from exit management, matching what was described as "later, independent SaaS
-   products" once the exit engine is live. There is no code to lose by leaving them exactly
-   as they are until that work actually starts.
+## What is being merged
 
-## Why the split happened and why it isn't a problem to fix later
+Only one thing from `kb-test` has real code worth bringing over:
 
-`kb-test`'s `AGENTS.md` mandates a full event-driven, registry-based, zero-conditional
-architecture across ten modules before any of them does anything. That's a reasonable target
-for a mature multi-engine platform; it is not achievable as a first MVP, and building toward
-it is very likely why nine of those ten modules never got past a `pom.xml`. `kb-xit` grew
-in parallel with a much smaller, single-module scope (`CODING_STANDARDS.md`, not `AGENTS.md`)
-and reached a working, tested, nearly-production-ready system as a result.
+- **`market-data-engine/`** — Upstox historical-candle fetching, timeframe aggregation, 17
+  passing tests. Maps directly to Phase 4.4's `HistoricalMarketDataFeed`.
 
-The two repos were never actually building the same thing at different speeds — one is an
-exit engine, the other is a future signal-generation platform that hasn't started. Once that's
-named, there's no code to reconcile between them beyond the one module above.
+Everything else in `kb-test` is empty modules with heavy architectural docs (`AGENTS.md`,
+9-module skeleton) that describe **signal generation and full-pipeline automation** — a
+different product line planned for *after* the exit engine is in production. That work will
+resume here as new packages once the exit engine is live; the empty scaffolding does not
+need to be carried across.
 
-## What this means going forward
+## Chosen shapes (for the merge itself)
 
-- Bug fixes, features, and the Phase 3.5/4 work in `IMPLEMENTATION_PLAN.md` happen in `kb-xit`.
-- `kb-test` is not touched until the exit engine (this repo) is in production and the team is
-  ready to start the signal-generation products. At that point, `kb-test`'s `AGENTS.md` and
-  docs are worth revisiting with the same lesson applied: scope the first version to one thin
-  slice before enforcing the full architecture.
-- When `market-data-engine` is actually needed (Phase 4's historical feed), port only that
-  module's code into a new `com.kbquants.historical` (or similar) package in `kb-xit`, adapted
-  to implement this repo's `MarketDataFeed` interface — don't pull in `kb-test`'s multi-module
-  Maven structure or its `AGENTS.md` constraints along with it.
+Not decisions to revisit each time — recorded here so the merge, when it happens, follows
+them without new discussion.
+
+1. **Survivor repo: `kb-xit`.** `kb-test` is imported *into* `kb-xit`, not the other way
+   around. The repo that has the real code and the linear working history wins.
+
+2. **History preservation: `git filter-repo` on `kb-test` down to just `market-data-engine/`,
+   then merge with `--allow-unrelated-histories` into `kb-xit`.** Full native `git log` /
+   `git blame` on the ported code, and `kb-xit`'s existing history stays clean — no
+   inheritance of `AGENTS.md`, empty modules, or the 10-module parent POM into the merged
+   history alongside it.
+
+3. **Module structure: stay single-module** in `kb-xit`. The ported code becomes an internal
+   package (e.g. `com.kbquants.historical`), not a Maven sub-module. Multi-module was
+   exactly the shape that stalled in `kb-test` (9 empty modules under a heavy parent POM);
+   splitting only makes sense once there's a second real consumer, which will not exist at
+   the point of this merge.
+
+4. **`kb-test` afterwards: archived on GitHub, not deleted.** Read-only, stays visible for
+   the history/reference of `AGENTS.md` and the docs that shaped the original architecture
+   thinking. Deletion is irreversible and buys nothing over archiving.
+
+## Merge preflight (known collision points)
+
+Recorded now so the person doing the merge (or the next AI session) doesn't rediscover them
+under time pressure:
+
+- **Interface name collision.** Both repos define a `MarketDataFeed` interface — `kb-xit`'s
+  at `com.kbquants.session.MarketDataFeed` (the one every broker implementation already
+  plugs into), `kb-test`'s at `com.kbquants.marketdata.feed.MarketDataFeed` (a different,
+  historical-candle-shaped one). The ported code must implement `kb-xit`'s existing
+  interface, not add a second competing one.
+- **Class name collision.** Both repos define an `UpstoxMarketDataFeed` — live WebSocket
+  ticks in `kb-xit`, historical candles in `kb-test`. Rename the ported one on the way in
+  (e.g. `UpstoxHistoricalCandleFeed`).
+- **Dependency version drift.** Lombok `1.18.30` (kb-xit) vs `1.18.42` (kb-test); JUnit
+  `5.10.0` vs `5.10.2`; `kb-test` also declares `jackson-databind` and a bare
+  `slf4j-api`/`slf4j-simple` pair not currently in `kb-xit`. Reconcile deliberately during
+  the merge, don't assume-latest.
+- **`AGENTS.md` scope.** `kb-test`'s `AGENTS.md` mandates a repo-wide event-driven +
+  registry-only architecture that this codebase does not follow (and does not need to,
+  for its scope). Do not carry `AGENTS.md` across as-is — either fold anything still
+  relevant into `CODING_STANDARDS.md` and drop the rest, or leave it behind in the archived
+  `kb-test` repo entirely.
+
+## What this document is not
+
+Not an implementation of the merge. See `IMPLEMENTATION_PLAN.md` step 4.0 for the ordered
+step-by-step, and don't act on any of the "preflight" bullets above without checking that
+step's acceptance criteria first.
