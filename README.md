@@ -448,6 +448,7 @@ While `/pause` is on you're still told about detected positions, but accepting o
 | `/exit` | Show a button per open trade, plus "sell all" |
 | `/exit <orderId>` / `/exit all` | Sell directly, skipping the buttons |
 | `/status` | Report all open trades: instrument, entry, current price, phase, stop-loss |
+| `/health` | Feed state and last-tick age per open trade, plus daily token validity |
 | `/refresh` | Re-fetch the instrument master now, instead of waiting for Wednesday |
 | `/pause` / `/resume` | Stop / resume adopting new trades. Open trades stay managed |
 | `/release` / `/observe` / `/manage` | Show a button per open trade |

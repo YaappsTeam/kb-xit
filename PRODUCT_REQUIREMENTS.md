@@ -356,7 +356,7 @@ Per-account fields are never environment variables in the single-account sense (
 - ⏸ **Blocked, deferred:** one supervised real order, single lot, before trusting `PLACE_REAL_ORDERS` unattended — same static-IP dependency
 - External configuration (YAML) for all thresholds, if env-var-per-account outgrows itself — not blocked, can proceed independently
 - Historical data feed — done (story #24): `com.kbquants.marketdata.pricepath` fetches and converts real historical NIFTY-option candles into the same price-path shape the simulation engine already consumes, scoped to today's tracked instrument window
-- Structured logging, health checks, graceful shutdown — not blocked
+- Structured logging, health checks, graceful shutdown — done (story #23): JSON logs with accountId/orderId in MDC, `/health` command, `TradeMonitor#shutdown` on every account at process exit
 
 ## 9. Risks and mitigations
 
