@@ -269,7 +269,7 @@ Out of scope for the MVP: self-service onboarding, a web UI for account manageme
 
 **Not a permanent limit.** The exit engine, milestone ladder and position sizer are all instrument-agnostic already — broadening scope later (other indices, equities, a wider strike window) is a change to what `InstrumentMasterLoader` and `StrikeWindow` keep, not a redesign of anything downstream.
 
-**Known gap: this scope applies to `/track` only, not broker-fill adoption.** `WATCH_BROKER_FILLS`/`/adopt` builds a trade directly from the broker's `TradeFillEvent` (instrument key, price, quantity all come from the fill itself) and never consults the instrument catalog — so a detected equity or futures position can still be adopted even though typing its symbol into `/track` would fail with `unknown instrument`. Not addressed here because it's a different code path than the one this cut targets (see IMPLEMENTATION_PLAN.md Phase 3.5.7); worth closing before broker-fill watching is relied on for anything beyond NIFTY options.
+**Broker-fill adoption enforces the same scope as `/track`.** `WATCH_BROKER_FILLS`/`/adopt` checks a detected fill's instrument key against today's NIFTY window before it is ever offered — an out-of-scope position (equity, futures, another underlying) is silently skipped (logged, not notified — the account may routinely trade instruments this deployment was never meant to touch, and flagging every one would just be noise on top of what `WATCH_BROKER_FILLS` already warns about). This applies identically whether explicit adoption is required or not, since scope and adoption-consent are independent questions. See `TradeMonitor.isOutOfScope`.
 
 ## 6. Credential management
 

@@ -11,6 +11,7 @@ import com.kbquants.domain.RiskSettings;
 import com.kbquants.domain.TradeContext;
 import com.kbquants.domain.TradingToken;
 import com.kbquants.engine.ExitEngine;
+import com.kbquants.instrument.InstrumentCatalog;
 import com.kbquants.notification.Notifier;
 import com.kbquants.notification.ProfitMilestoneTracker;
 import com.kbquants.notification.TelegramCommandHandler;
@@ -136,6 +137,22 @@ public class TradeMonitor implements TelegramCommandListener {
     private final TradingToken tradingToken;
 
     /**
+     * Today's tracked NIFTY instrument window, checked against a detected
+     * (not a /track'd) fill's instrument key. Empty when there is nothing
+     * to check against -- simulated mode has no catalog, and tests that
+     * don't care about scope enforcement don't need to supply one.
+     * <p>
+     * /track never needs this: {@link TrackRequestResolver} (in live mode,
+     * {@code InstrumentAwareTrackRequestResolver}) already resolves only
+     * against this same catalog, so an out-of-scope symbol is rejected
+     * before {@link #onFill} is ever reached. Detected fills bypass the
+     * resolver entirely -- they arrive as a raw {@link TradeFillEvent}
+     * from the broker's own order stream -- so this is the one path that
+     * needs its own check. See PRODUCT_REQUIREMENTS.md F9.
+     */
+    private final Optional<InstrumentCatalog> instrumentCatalog;
+
+    /**
      * Order ids already taken on, kept after the trade itself is dropped.
      * <p>
      * activeTrades used to double as the duplicate-fill guard, which is why
@@ -232,6 +249,24 @@ public class TradeMonitor implements TelegramCommandListener {
                          ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
                          ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken,
                          boolean requireExplicitAdoption, PositionQuery positionQuery) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, exitOrderPlacer, tradingToken, requireExplicitAdoption, positionQuery,
+                Optional.empty());
+    }
+
+    /**
+     * @param instrumentCatalog  today's tracked instrument window, checked
+     *                           against detected (not /track'd) fills --
+     *                           see the field Javadoc. Empty when there is
+     *                           nothing to check against.
+     */
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken,
+                         boolean requireExplicitAdoption, PositionQuery positionQuery,
+                         Optional<InstrumentCatalog> instrumentCatalog) {
+        this.instrumentCatalog = Objects.requireNonNull(instrumentCatalog, "instrumentCatalog must not be null");
         this.positionQuery = Objects.requireNonNull(positionQuery, "positionQuery must not be null");
         this.requireExplicitAdoption = requireExplicitAdoption;
         this.tradingToken = Objects.requireNonNull(tradingToken, "tradingToken must not be null");
@@ -258,6 +293,18 @@ public class TradeMonitor implements TelegramCommandListener {
      */
     void onDetectedFill(TradeFillEvent fill) {
 
+        // Out-of-scope instruments are never offered, adopted or auto-adopted --
+        // checked ahead of the adoption-consent question below, since scope
+        // and consent are independent concerns. No Telegram notification: the
+        // account may routinely trade unrelated instruments this deployment
+        // was never meant to touch, and flagging each one would just be noise
+        // on top of what WATCH_BROKER_FILLS already warns about.
+        if (isOutOfScope(fill)) {
+            log.info("Ignoring a detected fill outside today's tracked instrument scope: orderId={} instrument={}",
+                    fill.getOrderId(), fill.getInstrumentKey());
+            return;
+        }
+
         if (!requireExplicitAdoption) {
             onFill(fill);
             return;
@@ -279,6 +326,23 @@ public class TradeMonitor implements TelegramCommandListener {
             choices.put("Manage the exit of this", token);
             choices.put("Leave it alone", TelegramCommandHandler.IGNORE_CALLBACK_PREFIX + fill.getOrderId());
         }
+
+        offerAdoption(fill, choices);
+    }
+
+    /**
+     * True when a catalog exists to check against and the fill's instrument
+     * isn't in it. No catalog (simulated mode, or a test that didn't supply
+     * one) means nothing to check against, so nothing is out of scope --
+     * this must never itself become a reason to refuse a fill.
+     */
+    private boolean isOutOfScope(TradeFillEvent fill) {
+        return instrumentCatalog
+                .map(catalog -> catalog.registry().resolve(fill.getInstrumentKey()).isEmpty())
+                .orElse(false);
+    }
+
+    private void offerAdoption(TradeFillEvent fill, LinkedHashMap<String, String> choices) {
 
         String prompt = String.format(
                 "New position detected at your broker: %s x%d at %.2f (orderId=%s).%n"

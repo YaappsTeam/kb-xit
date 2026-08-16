@@ -4,10 +4,14 @@ import com.kbquants.domain.ActiveLadder;
 import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.RiskSettings;
 import com.kbquants.domain.TradingToken;
+import com.kbquants.instrument.Instrument;
+import com.kbquants.instrument.InstrumentCatalog;
+import com.kbquants.instrument.InstrumentRegistry;
 import com.kbquants.notification.Notifier;
 import com.kbquants.session.EstimatedChargesService;
 import com.kbquants.session.LiteralTrackRequestResolver;
 import com.kbquants.session.MarketDataFeed;
+import com.kbquants.session.NoOpPositionQuery;
 import com.kbquants.session.NoOpTradeStore;
 import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.PaperExitOrderPlacer;
@@ -20,6 +24,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -90,17 +95,32 @@ class TradeMonitorAdoptionTest {
     private record Fixture(TradeMonitor monitor, FakeOrderFillFeed fills, RecordingNotifier notifier) {}
 
     private static Fixture fixture(boolean requireAdoption) {
+        return fixture(requireAdoption, Optional.empty());
+    }
+
+    private static Fixture fixture(boolean requireAdoption, Optional<InstrumentCatalog> catalog) {
         RecordingNotifier notifier = new RecordingNotifier();
         FakeOrderFillFeed fills = new FakeOrderFillFeed();
         TradeMonitor monitor = new TradeMonitor(fills, fill -> new FakeFeed(), notifier,
                 new LiteralTrackRequestResolver(), new ActiveLadder(MilestoneLadder.equityLadder()),
                 new EstimatedChargesService(), new RiskSettings(0), new NoOpTradeStore(),
-                new PaperExitOrderPlacer(), new TradingToken(ZoneId.of("Asia/Kolkata")), requireAdoption);
+                new PaperExitOrderPlacer(), new TradingToken(ZoneId.of("Asia/Kolkata")), requireAdoption,
+                new NoOpPositionQuery(), catalog);
         return new Fixture(monitor, fills, notifier);
     }
 
+    /** A catalog whose only known instrument is NSE_EQ|X -- everything else is out of scope. */
+    private static InstrumentCatalog catalogKnowingOnly(String instrumentKey) {
+        Instrument known = new Instrument(instrumentKey, instrumentKey, "NSE_FO", "CE", "NIFTY", 65, 1800, 0.05);
+        return new InstrumentCatalog(new InstrumentRegistry(List.of(known)));
+    }
+
     private static void detect(Fixture f, String orderId) {
-        f.fills().listener.onFill(new TradeFillEvent(orderId, "NSE_EQ|X", 100.0, 10, 0.05, "ACC"));
+        detect(f, orderId, "NSE_EQ|X");
+    }
+
+    private static void detect(Fixture f, String orderId, String instrumentKey) {
+        f.fills().listener.onFill(new TradeFillEvent(orderId, instrumentKey, 100.0, 10, 0.05, "ACC"));
     }
 
     @Test
@@ -265,5 +285,75 @@ class TradeMonitorAdoptionTest {
         f.monitor().onTokenProvided("a-token");
 
         assertEquals(1, f.fills().credentialSignals);
+    }
+
+    // ---- instrument-scope enforcement (PRODUCT_REQUIREMENTS.md F9) ----
+
+    /**
+     * The whole point of this scope check: a broker's fill stream carries
+     * the entire account, and this deployment currently only manages NIFTY
+     * options. A detected equity/other-underlying position must never be
+     * offered for adoption, regardless of how tempting "just take it" would
+     * be for a trader who forgot what this system currently covers.
+     */
+    @Test
+    void aDetectedFillOutsideTodaysScopeShouldNotBeOffered() {
+
+        Fixture f = fixture(true, Optional.of(catalogKnowingOnly("NSE_FO|IN_SCOPE")));
+
+        detect(f, "broker-1", "NSE_EQ|OUT_OF_SCOPE");
+
+        assertTrue(f.notifier().messages.isEmpty(), () -> f.notifier().messages.toString());
+        f.monitor().onPendingAdoptionsRequested();
+        assertTrue(f.notifier().last().contains("No positions waiting"));
+    }
+
+    @Test
+    void aDetectedFillInsideTodaysScopeShouldStillBeOfferedNormally() {
+
+        Fixture f = fixture(true, Optional.of(catalogKnowingOnly("NSE_FO|IN_SCOPE")));
+
+        detect(f, "broker-1", "NSE_FO|IN_SCOPE");
+
+        assertTrue(f.notifier().anyContains("NOT being managed"));
+    }
+
+    /**
+     * The scope check and the adoption-consent question are independent --
+     * an out-of-scope fill must not slip through even with the consent gate
+     * off, the same way an unknown /track symbol is refused regardless of
+     * any other setting.
+     */
+    @Test
+    void withoutTheGateAnOutOfScopeFillShouldStillBeRefused() {
+
+        Fixture f = fixture(false, Optional.of(catalogKnowingOnly("NSE_FO|IN_SCOPE")));
+
+        detect(f, "broker-1", "NSE_EQ|OUT_OF_SCOPE");
+
+        assertTrue(f.notifier().messages.isEmpty(), () -> f.notifier().messages.toString());
+        f.monitor().onStatusRequested();
+        assertEquals("No active trades", f.notifier().last());
+    }
+
+    @Test
+    void withoutTheGateAnInScopeFillShouldStillBeManagedDirectly() {
+
+        Fixture f = fixture(false, Optional.of(catalogKnowingOnly("NSE_FO|IN_SCOPE")));
+
+        detect(f, "broker-1", "NSE_FO|IN_SCOPE");
+
+        assertTrue(f.notifier().anyContains("now tracking"));
+    }
+
+    /** No catalog supplied (simulated mode) means nothing is out of scope. */
+    @Test
+    void withNoCatalogEveryInstrumentShouldBeInScope() {
+
+        Fixture f = fixture(true, Optional.empty());
+
+        detect(f, "broker-1", "NSE_EQ|ANYTHING");
+
+        assertTrue(f.notifier().anyContains("NOT being managed"));
     }
 }
