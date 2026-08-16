@@ -38,8 +38,11 @@
        narrowed to NIFTY 50 options only: nearest expiry, 15 strikes
        each side of spot, daily strike-window refresh (Phase 3.5.7),
        0.26.1 corrupt-file isolation test between two accounts'
-       persistence, closing the last open Phase 3.5 acceptance item. -->
-  <version>0.26.1-SNAPSHOT</version>
+       persistence, closing the last open Phase 3.5 acceptance item,
+       0.27.0 broker-fill adoption enforces the same NIFTY-options
+       scope as /track: a detected fill outside today's strike window
+       is never offered, adopted or auto-adopted. -->
+  <version>0.27.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

@@ -247,9 +247,13 @@ public class Main {
         // open", which would flag every managed trade as gone.
         PositionQuery positionQuery = new UpstoxPositionQuery(tradingToken);
 
+        // Enforces today's NIFTY scope on detected (not /track'd) fills --
+        // see TradeMonitor's instrumentCatalog field Javadoc and
+        // PRODUCT_REQUIREMENTS.md F9. Empty in simulated mode, where
+        // sharedCatalog is null and there is nothing to check against.
         return new TradeMonitor(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder,
                 chargesService, riskSettings, tradeStore, exitOrderPlacer, tradingToken, watchBrokerFills,
-                positionQuery);
+                positionQuery, Optional.ofNullable(sharedCatalog));
     }
 
     /**

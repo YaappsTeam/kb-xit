@@ -355,7 +355,7 @@ One production host and one static IP serve all 10 accounts — Upstox's rule is
 - [x] Strike window is 15 rungs each side of ATM, clamped at chain edges — verified by `StrikeWindowTest`
 - [x] A failed spot lookup or download on refresh keeps the previous window rather than clearing it
 - [ ] Field names (`strike_price`, `expiry`) verified against a real Upstox payload — blocked on the same static-IP/network-access gap as Phase 4; revisit together
-- [ ] Known gap, not yet closed: broker-fill adoption (`WATCH_BROKER_FILLS`/`/adopt`) bypasses the instrument catalog entirely (it builds a trade from the fill event directly), so a detected non-NIFTY position can still be adopted even though `/track`ing it manually would fail — see PRODUCT_REQUIREMENTS.md F9
+- [x] Known gap closed: `TradeMonitor.onDetectedFill` now checks a detected fill's instrument key against today's NIFTY window (`isOutOfScope`) before offering, adopting, or auto-adopting it — a detected non-NIFTY position is silently skipped (logged, not notified) rather than reaching `onFill`. See PRODUCT_REQUIREMENTS.md F9
 
 ### Acceptance criteria (Phase 3.5: all true — phase complete)
 
