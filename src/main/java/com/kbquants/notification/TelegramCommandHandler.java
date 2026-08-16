@@ -16,12 +16,24 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * Long-polls Telegram's getUpdates Bot API, parses each incoming message as
- * a command (/track, /exit, /status), and dispatches it to a
- * TelegramCommandListener. This is the inbound half of the Telegram control
- * plane -- TelegramNotifier is the outbound half.
+ * a command (/track, /exit, /status), and dispatches it to whichever
+ * TelegramCommandListener is registered for the sending chat. This is the
+ * inbound half of the Telegram control plane -- TelegramNotifier is the
+ * outbound half.
+ * <p>
+ * One bot token serves every registered trader; which trader a given
+ * update belongs to is resolved per-update from the chat id Telegram
+ * attaches to every message and callback, via {@code listenerByChatId}.
+ * An update from a chat id that resolves to nothing gets a fixed refusal
+ * and touches no listener -- see PRODUCT_REQUIREMENTS.md section F8. This
+ * is the one seam in the system where getting the routing wrong would let
+ * one trader act on another's trades, so the chat id is looked up before
+ * any dispatch happens, never accepted from the message body.
  * <p>
  * The HTTP polling loop is not unit-tested (requires live network access to
  * api.telegram.org -- see DEVELOPMENT.md). The pure command-parsing logic
@@ -93,8 +105,16 @@ public class TelegramCommandHandler {
             "",
             "Every percentage reported is net of brokerage and taxes.");
 
-    private final TelegramCredentials credentials;
-    private final TelegramCommandListener listener;
+    /**
+     * Shown verbatim to a chat that is not a registered account. Does not
+     * enumerate who IS registered -- that would leak the account list to
+     * anyone who messages the bot.
+     */
+    static final String UNKNOWN_ACCOUNT_REPLY =
+            "This chat is not a registered xit-mc account. Contact whoever manages this deployment.";
+
+    private final String botToken;
+    private final Function<String, Optional<TelegramCommandListener>> listenerByChatId;
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final Gson gson = new Gson();
 
@@ -102,9 +122,23 @@ public class TelegramCommandHandler {
     private Thread pollingThread;
     private long lastUpdateId = 0;
 
-    public TelegramCommandHandler(TelegramCredentials credentials, TelegramCommandListener listener) {
-        this.credentials = Objects.requireNonNull(credentials, "credentials must not be null");
-        this.listener = Objects.requireNonNull(listener, "listener must not be null");
+    /**
+     * @param botToken          the one Telegram bot token every registered
+     *                          trader talks to
+     * @param listenerByChatId  resolves an incoming update's chat id to the
+     *                          account it belongs to, or empty if none does
+     */
+    public TelegramCommandHandler(String botToken, Function<String, Optional<TelegramCommandListener>> listenerByChatId) {
+        this.botToken = requireNonBlank(botToken, "botToken");
+        this.listenerByChatId = Objects.requireNonNull(listenerByChatId, "listenerByChatId must not be null");
+    }
+
+    private static String requireNonBlank(String value, String field) {
+        Objects.requireNonNull(value, field + " must not be null");
+        if (value.isBlank()) {
+            throw new IllegalArgumentException(field + " must not be blank");
+        }
+        return value;
     }
 
     public void start() {
@@ -144,7 +178,7 @@ public class TelegramCommandHandler {
     private void pollOnce() throws IOException, InterruptedException {
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_BASE + "/bot" + credentials.getBotToken()
+                .uri(URI.create(API_BASE + "/bot" + botToken
                         + "/getUpdates?offset=" + (lastUpdateId + 1)
                         + "&timeout=" + LONG_POLL_TIMEOUT_SECONDS))
                 .timeout(Duration.ofSeconds(LONG_POLL_TIMEOUT_SECONDS + 10))
@@ -167,25 +201,70 @@ public class TelegramCommandHandler {
             lastUpdateId = Math.max(lastUpdateId, update.update_id);
 
             if (update.message != null) {
-                dispatch(update.message.text, listener);
-
-                // A token pasted into chat stays in the history on both
-                // devices and on Telegram's servers. Deleting it is the
-                // only thing that limits the exposure, and it has to
-                // happen whether or not the command parsed.
-                if (carriesASecret(update.message.text)) {
-                    deleteMessage(update.message.message_id);
-                }
+                handleMessage(update.message);
             }
 
             if (update.callback_query != null) {
-                // Acknowledge first: until answerCallbackQuery is called the
-                // user's client keeps showing a spinner on the button, even
-                // though the action itself has already been handled.
-                acknowledgeCallback(update.callback_query.id);
-                dispatchCallback(update.callback_query.data, listener);
+                handleCallback(update.callback_query);
             }
         }
+    }
+
+    private void handleMessage(TelegramMessage message) {
+
+        String chatId = chatIdOf(message);
+
+        // Deletion is independent of whether the chat is registered: a
+        // credential pasted by mistake into an unrecognised chat is still
+        // a credential pasted into chat, and there is no account-specific
+        // reason to leave it sitting in history.
+        if (carriesASecret(message.text)) {
+            deleteMessage(chatId, message.message_id);
+        }
+
+        if (chatId == null) {
+            log.warn("Message with no chat id -- cannot route or reply");
+            return;
+        }
+
+        Optional<TelegramCommandListener> listener = listenerByChatId.apply(chatId);
+        if (listener.isEmpty()) {
+            log.warn("Message from unregistered chat id={}", chatId);
+            sendPlainMessage(chatId, UNKNOWN_ACCOUNT_REPLY);
+            return;
+        }
+
+        dispatch(message.text, listener.get());
+    }
+
+    private void handleCallback(TelegramCallbackQuery callback) {
+
+        // Acknowledge first: until answerCallbackQuery is called the
+        // user's client keeps showing a spinner on the button, even
+        // though the action itself may already have been handled.
+        acknowledgeCallback(callback.id);
+
+        String chatId = callback.message == null ? null : chatIdOf(callback.message);
+        if (chatId == null) {
+            log.warn("Callback with no chat id -- cannot route");
+            return;
+        }
+
+        Optional<TelegramCommandListener> listener = listenerByChatId.apply(chatId);
+        if (listener.isEmpty()) {
+            // Buttons are only ever sent to a chat this handler already
+            // recognised as an account, so this should not happen in
+            // practice; log rather than reply, since a callback tap has no
+            // natural place to show a refusal.
+            log.warn("Callback from unregistered chat id={}", chatId);
+            return;
+        }
+
+        dispatchCallback(callback.data, listener.get());
+    }
+
+    static String chatIdOf(TelegramMessage message) {
+        return message.chat == null ? null : String.valueOf(message.chat.id);
     }
 
     /** True for commands whose text contains a live credential. */
@@ -193,19 +272,36 @@ public class TelegramCommandHandler {
         return text != null && text.trim().toLowerCase().startsWith("/token ");
     }
 
+    private void sendPlainMessage(String chatId, String text) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(API_BASE + "/bot" + botToken + "/sendMessage"))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                            "chat_id=" + URLEncoder.encode(chatId, StandardCharsets.UTF_8)
+                                    + "&text=" + URLEncoder.encode(text, StandardCharsets.UTF_8)))
+                    .build();
+            httpClient.send(request, HttpResponse.BodyHandlers.discarding());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn("Could not reply to unregistered chat id={}: {}", chatId, e.getMessage());
+        }
+    }
+
     /**
      * Best effort. Telegram refuses deletions older than 48 hours and in
      * some chat types, so the user is separately told to delete it -- this
      * reduces the window, it does not guarantee removal.
      */
-    private void deleteMessage(Long messageId) {
-        if (messageId == null) {
+    private void deleteMessage(String chatId, Long messageId) {
+        if (messageId == null || chatId == null) {
             return;
         }
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(API_BASE + "/bot" + credentials.getBotToken()
-                            + "/deleteMessage?chat_id=" + URLEncoder.encode(credentials.getChatId(), StandardCharsets.UTF_8)
+                    .uri(URI.create(API_BASE + "/bot" + botToken
+                            + "/deleteMessage?chat_id=" + URLEncoder.encode(chatId, StandardCharsets.UTF_8)
                             + "&message_id=" + messageId))
                     .timeout(Duration.ofSeconds(10))
                     .GET()
@@ -225,7 +321,7 @@ public class TelegramCommandHandler {
         }
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(API_BASE + "/bot" + credentials.getBotToken()
+                    .uri(URI.create(API_BASE + "/bot" + botToken
                             + "/answerCallbackQuery?callback_query_id="
                             + URLEncoder.encode(callbackQueryId, StandardCharsets.UTF_8)))
                     .timeout(Duration.ofSeconds(10))
@@ -486,13 +582,22 @@ public class TelegramCommandHandler {
         TelegramCallbackQuery callback_query;
     }
 
-    private static final class TelegramMessage {
+    // Package-private (not private): TelegramCommandHandlerTest constructs
+    // these directly to test chatIdOf without a network round trip.
+    static final class TelegramMessage {
         Long message_id;
         String text;
+        TelegramChat chat;
     }
 
     private static final class TelegramCallbackQuery {
         String id;
         String data;
+        /** The original message the tapped button is attached to -- carries the chat. */
+        TelegramMessage message;
+    }
+
+    static final class TelegramChat {
+        long id;
     }
 }

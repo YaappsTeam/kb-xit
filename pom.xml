@@ -31,8 +31,11 @@
        order-placement credential, 0.21.0 real SELL orders via
        UpstoxExitOrderPlacer, opt-in and guarded against double sells,
        0.24.0 per-trader account registry (Phase 3.5.1 foundation for
-       multi-account support). -->
-  <version>0.24.0-SNAPSHOT</version>
+       multi-account support), 0.25.0 Main and TelegramCommandHandler
+       wired for multiple accounts: one TradeMonitor per registered
+       account, Telegram commands routed by chat id, per-account
+       trade persistence (Phase 3.5.2/3.5.3). -->
+  <version>0.25.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

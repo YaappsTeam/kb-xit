@@ -10,7 +10,8 @@ Right now the runnable mode is **paper trading**, on either a simulated price fe
 
 - Java 17
 - Maven
-- A Telegram bot (a token + your chat id) — see [Setting up your Telegram bot](#setting-up-your-telegram-bot) below if you don't have one yet
+- A Telegram bot (one bot token, shared by every account) — see [Setting up your Telegram bot](#setting-up-your-telegram-bot) below if you don't have one yet
+- At least one registered trader account (chat id + Upstox settings) — see [Registering accounts](#registering-accounts) below
 
 ## Quick start (paper trading)
 
@@ -18,6 +19,14 @@ Right now the runnable mode is **paper trading**, on either a simulated price fe
 git clone https://github.com/YaappsTeam/kb-xit.git
 cd kb-xit
 ```
+
+**Register at least one account:**
+
+```bash
+cp accounts.properties.example accounts.properties
+```
+
+Edit `accounts.properties` and fill in at least one trader's real chat id (see [Setting up your Telegram bot](#setting-up-your-telegram-bot) for how to find it). The other fields (Upstox credentials) can stay as placeholders for paper trading with simulated prices — they're only read when `MARKET_DATA=live`.
 
 Pick the path for your shell:
 
@@ -27,11 +36,10 @@ Pick the path for your shell:
 cp run.sh.example run.sh
 ```
 
-Edit `run.sh` and fill in your real values:
+Edit `run.sh` and fill in your bot token:
 
 ```bash
 export TELEGRAM_BOT_TOKEN="your-telegram-bot-token-here"
-export TELEGRAM_CHAT_ID="your-telegram-chat-id-here"
 ```
 
 Build and run:
@@ -49,11 +57,10 @@ Bash scripts don't run in PowerShell, and double-clicking `run.sh` in Explorer/I
 Copy-Item run.ps1.example run.ps1
 ```
 
-Edit `run.ps1` and fill in your real values:
+Edit `run.ps1` and fill in your bot token:
 
 ```powershell
 $env:TELEGRAM_BOT_TOKEN = "your-telegram-bot-token-here"
-$env:TELEGRAM_CHAT_ID = "your-telegram-chat-id-here"
 ```
 
 Build and run:
@@ -65,15 +72,15 @@ mvn package
 
 ---
 
-Either way, `run.sh` / `run.ps1` are already gitignored — your token never risks being committed. Never edit `run.sh.example` / `run.ps1.example` with real values; those files *are* tracked.
+`run.sh` / `run.ps1` / `accounts.properties` are all gitignored — none of them risk being committed. Never edit the `.example` files with real values; those files *are* tracked.
 
 You should see:
 
 ```
-xit-mc started in PAPER trading mode. Send /track <symbol> to Telegram to begin.
+xit-mc started in PAPER trading mode with simulated market data, managing 1 account(s): [alice]. Send /track <symbol> to Telegram to begin.
 ```
 
-Now message your bot on Telegram:
+Now message your bot on Telegram from the chat you registered:
 
 ```
 /track NSE_EQ|INE848E01016 1500 10
@@ -83,11 +90,30 @@ A simulated price feed starts at ₹1500 and random-walks from there. You will f
 
 Stop the process with `Ctrl+C` — it shuts down the Telegram poller cleanly.
 
+## Registering accounts
+
+Every trader this deployment manages gets one entry in `accounts.properties` (copied from `accounts.properties.example`, gitignored). One process, one bot token, up to ten independent accounts — each with its own Telegram chat, its own Upstox credentials, its own capital and risk settings, its own open trades, and its own persistence file. See PRODUCT_REQUIREMENTS.md section F8 for the full isolation model.
+
+```properties
+account.alice.telegramChatId=111222333
+account.alice.upstoxAnalyticsToken=alice-analytics-token-here
+account.alice.upstoxApiKey=alice-api-key
+account.alice.upstoxApiSecret=alice-api-secret
+account.alice.upstoxRedirectUri=https://example.com/upstox/callback
+account.alice.capitalPerTrade=50000
+account.alice.maxRiskPerTrade=5000
+account.alice.defaultMilestoneSetName=EQUITY
+```
+
+A message from a chat id that isn't registered gets a polite refusal and touches nothing — the bot never guesses which account a stranger's message belongs to. Adding an eleventh trader is a config change and a restart, not a code change; there's no in-session "register a new account" command by design (see REPO_STRATEGY.md / IMPLEMENTATION_PLAN.md Phase 3.5 for why).
+
+`ACCOUNTS_FILE` overrides the path if you don't want `accounts.properties` in the working directory.
+
 ## Live market data (paper trades, real prices)
 
-Set `MARKET_DATA=live` to drive the exit engine from real Upstox ticks instead of the simulated random walk. Trades stay on paper — nothing places a broker order.
+Set `MARKET_DATA=live` to drive the exit engine from real Upstox ticks instead of the simulated random walk, for every registered account. Trades stay on paper — nothing places a broker order.
 
-This needs an Upstox **Analytics Token**, which is not the same as the standard access token:
+This needs an Upstox **Analytics Token** per account, which is not the same as the standard access token:
 
 | | Analytics Token | Standard access token |
 |---|---|---|
@@ -96,25 +122,23 @@ This needs an Upstox **Analytics Token**, which is not the same as the standard 
 | Market data + WebSocket streaming | ✅ (no static IP needed) | ✅ |
 | Placing/modifying orders | ❌ read-only | ✅ |
 
-Live prices only ever need the first one — so live-data mode involves **no daily login**, and the token it uses physically cannot place an order. The daily token and a registered static IP are needed only for the things that touch your account: placing orders, and checking positions.
+Live prices only ever need the first one — so live-data mode involves **no daily login**, and the token it uses physically cannot place an order. The daily token and a registered static IP are needed only for the things that touch an account: placing orders, and checking positions.
 
-Add to your `run.ps1` / `run.sh`:
+Set each account's `upstoxAnalyticsToken` in `accounts.properties`, then add to your `run.ps1` / `run.sh`:
 
 ```powershell
 $env:MARKET_DATA = "live"
-$env:UPSTOX_ANALYTICS_TOKEN = "your-upstox-analytics-token-here"
 ```
 
 ```bash
 export MARKET_DATA="live"
-export UPSTOX_ANALYTICS_TOKEN="your-upstox-analytics-token-here"
 ```
 
-You should see `... started in PAPER trading mode with LIVE Upstox market data`. Live mode also needs `CAPITAL_PER_TRADE` — see the next section, which covers how `/track` is used from here on.
+You should see `... started in PAPER trading mode with LIVE Upstox market data, managing N account(s)`. Each account's `capitalPerTrade` (in `accounts.properties`) sizes that account's bare `/track <symbol>` — see the next section, which covers how `/track` is used from here on.
 
 Ticks only arrive while the market is open, so outside market hours the engine sits idle rather than reporting an error.
 
-**If the price feed drops, you are told.** Without prices the stop-loss stops being enforced, and nothing else would make that visible — the bot looks healthy while the position is unprotected. The alert names the stop that is no longer being applied; reconnection is automatic and recovery is announced too. Each feed is closed when its trade closes or is released, so a session's trades don't leave a connection open apiece.
+**If a price feed drops, that account is told.** Without prices the stop-loss stops being enforced, and nothing else would make that visible — the bot looks healthy while the position is unprotected. The alert names the stop that is no longer being applied; reconnection is automatic and recovery is announced too. Each feed is closed when its trade closes or is released, so a session's trades don't leave a connection open apiece.
 
 ## Symbols, prices and lot sizing (live mode)
 
@@ -390,7 +414,7 @@ While `/pause` is on you're still told about detected positions, but accepting o
 
 1. In Telegram, search for **`@BotFather`**, tap **Start**, send `/newbot`, and follow the prompts (display name, then a unique username ending in `bot`). It replies with your **bot token** — this is `TELEGRAM_BOT_TOKEN`.
 2. Message your new bot at least once (e.g. `hi`) — Telegram won't let a bot message you until you've messaged it first.
-3. Search for **`@userinfobot`**, tap **Start** — it replies with your numeric `Id:`. That's `TELEGRAM_CHAT_ID`.
+3. Search for **`@userinfobot`**, tap **Start** — it replies with your numeric `Id:`. That's the `telegramChatId` for this trader's entry in `accounts.properties`. Repeat steps 2-3 for every trader you're registering; step 1 (the bot itself) is done once and shared.
 4. (Optional) Register the command list so it autocompletes in the chat. Either send `/setcommands` to BotFather, pick your bot, and paste:
    ```
    track - Manage the exit of a position you hold: /track <symbol> [price] [qty]
@@ -450,16 +474,16 @@ mvn test -Dtest=PhaseManagerTest   # a single test class
 ## Troubleshooting
 
 - **`Missing required environment variable: TELEGRAM_BOT_TOKEN`** — you're running `java -jar` directly (not `./run.sh`) without the env vars set in that shell, or `run.sh` still has placeholder values.
+- **`account registry file not found or unreadable`** — `accounts.properties` doesn't exist yet; `cp accounts.properties.example accounts.properties` and fill in at least one account, or set `ACCOUNTS_FILE` to point at it.
+- **`account '<id>' is missing required field: X`** — that account's entry in `accounts.properties` is incomplete; every field in `accounts.properties.example` except `upstoxSandbox`/`maxRiskPerTrade` is required.
 - **`TRADING_MODE=... is not supported yet`** — only `paper` is wired up right now; leave `TRADING_MODE` unset (it defaults to `paper`) or set it explicitly to `paper`. Note this is about *order execution*, and is separate from `MARKET_DATA` — live prices work fine in paper mode.
-- **`Missing required environment variable: UPSTOX_ANALYTICS_TOKEN`** — you set `MARKET_DATA=live` without a token. This is checked at startup rather than on your first `/track`, so it fails immediately instead of mid-session.
 - **`MARKET_DATA=... is not recognised`** — expected `simulated` (default) or `live`.
-- **`Missing required environment variable: CAPITAL_PER_TRADE`** — live mode needs it to size a bare `/track <symbol>`. Set it in `run.ps1` / `run.sh`.
 - **`unknown instrument: X`** — the symbol isn't in the master. Check spelling against the trading symbol Upstox uses; option symbols look like `NIFTY 25000 CE 18 AUG 26` (spaces optional).
 - **`X is an index and cannot be bought`** — expected; trade the option or future instead.
-- **`one lot of X costs … which exceeds capital per trade`** — raise `CAPITAL_PER_TRADE`, or pass an explicit quantity to override sizing entirely.
+- **`one lot of X costs … which exceeds capital per trade`** — raise that account's `capitalPerTrade` in `accounts.properties`, or pass an explicit quantity to override sizing entirely.
 - **Live mode connects but no ticks arrive** — the market is likely closed, or the instrument key is wrong. Check the key against Upstox's instrument list; the index is `NSE_INDEX|Nifty 50`, not `NIFTY50`.
 - **No jar found / `run.sh` fails immediately** — run `mvn package` first; `run.sh` looks for `target/xit-mc-*.jar`.
-- **Bot doesn't reply to `/track`** — confirm you've messaged the bot at least once already (step 2 above) and that `TELEGRAM_CHAT_ID` is your own numeric id, not the bot's.
+- **Bot doesn't reply to `/track`, or replies "This chat is not a registered xit-mc account"** — confirm you've messaged the bot at least once already (step 2 in Setting up your Telegram bot) and that the chat id in `accounts.properties` matches the numeric id from `@userinfobot`, not the bot's own id.
 - **On Windows, double-clicking `run.sh` prompts "Select an app to open this file"** — expected; Windows has no concept of a bash shebang line, so opening `run.sh` this way never actually runs it, no matter what app you pick. Use `run.ps1` in PowerShell instead (see Quick start above), or run `run.sh` from Git Bash if you have Git for Windows installed.
 
 ## Project documentation

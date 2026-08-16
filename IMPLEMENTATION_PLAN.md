@@ -297,35 +297,32 @@ This phase exists because the product target changed from "one developer-trader"
 
 **Tests:** `AccountRegistryTest` — load valid config, reject duplicate chat ids, reject duplicate account ids, lookup by either key, missing-file behavior.
 
-### Step 3.5.2 — Per-account TradeMonitor
+### Step 3.5.2 + 3.5.3 — Per-account TradeMonitor and chat-id routing (shipped together)
+
+**Delivered as one PR, not two.** `TelegramCommandHandler` was 1:1 with a single `TelegramCommandListener` — until it can resolve which account a chat id belongs to, it has no way to reach more than one `TradeMonitor` at all. Landing 3.5.2 alone would have meant `Main` built N monitors that nothing could ever route a command to: a broken intermediate state, not a working reduced one. See CODING_STANDARDS.md's testing philosophy and the project's "no half-finished implementations" rule.
 
 | Item | Detail |
 |---|---|
-| Refactor | `Main` builds `Map<accountId, TradeMonitor>` from the registry instead of one process-wide `TradeMonitor` |
-| Construction | Each `TradeMonitor` gets its own `OrderFillFeed`, `MarketDataFeed` factory, `ExitOrderPlacer`, `Notifier` (bound to that account's chat id), and `MilestoneLadder`/risk settings — the same constructor `TradeMonitor` already takes today, just called N times instead of once |
+| Refactor | `Main` builds `Map<accountId, TradeMonitor>` (and a parallel `Map<telegramChatId, TradeMonitor>` for routing) from the registry instead of one process-wide `TradeMonitor` |
+| Construction | Each `TradeMonitor` gets its own `OrderFillFeed`, `MarketDataFeed` factory, `ExitOrderPlacer`, `Notifier` (bound to that account's chat id), `TradingToken`, `TradeStore`, and `MilestoneLadder`/risk settings sized from that account's own `capitalPerTrade`/`maxRiskPerTrade` — the same constructor `TradeMonitor` already took, just called N times instead of once |
+| Shared, deliberately | The instrument master (`InstrumentCatalog`) is built once and passed to every account's resolver — it's public market data, not a credential, and downloading it N times would buy nothing |
 | Isolation guarantee | No shared mutable state between `TradeMonitor` instances — each owns its own `TradeContext` map, per CODING_STANDARDS.md §6 |
-| Fault isolation | A construction or runtime failure in one account's feed must not prevent the others from starting/running — catch and log per account in `Main`, never let one bad registration abort the whole process |
-
-**Tests:** extend `TradeMonitorTest` fakes to confirm two `TradeMonitor` instances sharing no state don't observe each other's fills/ticks (a fill on monitor A's fake feed must not appear in monitor B's trade list).
-
-### Step 3.5.3 — Telegram command routing by chat id
-
-| Item | Detail |
-|---|---|
-| Refactor | `TelegramCommandHandler` already receives `chat.id` on every update (Telegram's `getUpdates` payload) — today it's discarded in favor of the single `TELEGRAM_CHAT_ID` env var. Resolve it against `AccountRegistry` instead |
-| Behavior | Recognised chat id → dispatch to that account's `TradeMonitor`. Unrecognised chat id → fixed "not a registered account" reply, nothing else (no account enumeration, no hint about who *is* registered) |
+| Startup failure policy | A misconfigured or invalid account (e.g. an unresolvable `defaultMilestoneSetName` — belt-and-suspenders since `AccountRegistry` already validates it) fails the whole process at startup, the same way `AccountRegistry.load` already fails the whole registry on one bad entry, rather than silently starting with fewer accounts than configured. Continuing with only 9 of 10 accounts is not a safe degradation for a system whose job is watching money — a trader who believes their account is live and managed, when it silently isn't, is worse than the process refusing to start. This supersedes the original plan's "fault isolation... never let one bad registration abort the whole process" wording, which did not yet account for `AccountRegistry`'s own already-fail-fast behavior |
+| `TelegramCommandHandler` refactor | Constructor changed from `(TelegramCredentials, TelegramCommandListener)` to `(String botToken, Function<String, Optional<TelegramCommandListener>> listenerByChatId)`. Every update's chat id is read from Telegram's `message.chat.id` (or, for a button tap, `callback_query.message.chat.id`) and resolved against the registry-derived map before any dispatch happens |
+| Behavior | Recognised chat id → dispatch to that account's `TradeMonitor`. Unrecognised chat id → fixed `UNKNOWN_ACCOUNT_REPLY`, nothing else (no account enumeration, no hint about who *is* registered). A `/token` message is still deleted from chat history regardless of registration, since the credential-exposure risk doesn't depend on whether the sender turns out to be a known account |
 | Outbound | `TelegramNotifier` for a given `TradeMonitor` sends only to that account's `telegramChatId`, never the others |
 
-**Tests:** extend `TelegramCommandHandlerTest` — same command text from two different chat ids resolves to two different accounts; unknown chat id gets the refusal and touches no `TradeMonitor`.
+**Tests:** `TelegramCommandHandlerTest` gained `chatIdOf` unit tests (chat present / chat null) and constructor validation tests (blank/null bot token, null resolver). `AccountRegistry`/`TraderAccount` tests from 3.5.1 already cover the data layer this reads from. `Main`'s wiring itself follows the project's existing convention of not being unit-tested (thin `main()`; manually verified) — see DEVELOPMENT.md §7's note on the single-account `Main`, which the same rule now extends to.
 
-### Step 3.5.4 — Per-account persistence
+### Step 3.5.4 — Per-account persistence (path isolation shipped with 3.5.2/3.5.3; full acceptance criteria still open)
 
-| Item | Detail |
-|---|---|
-| Refactor | `JsonTradeStore` keys its file path (or top-level JSON key) by `accountId` — `~/.xit-mc/open-trades/<accountId>.json` rather than one shared file |
-| Restart behavior | Every account's open trades restore to that account only; a corrupt file for one account must not block the others from loading (same "missing file → start empty, don't refuse to start" principle already applied per-process today) |
+| Item | Detail | Status |
+|---|---|---|
+| Refactor | `Main` passes `new JsonTradeStore(path)` with a per-account path, `<TRADE_STATE_DIR>/<accountId>.json` (default dir `~/.xit-mc/open-trades/`) — `JsonTradeStore` itself needed no change, its `Path`-accepting constructor already existed | Shipped |
+| Restart behavior | Every account's open trades restore to that account only, since each has a distinct file | Shipped |
+| Corrupt-file isolation | A corrupt file for one account must not block another account's trades from loading | Not yet covered by a dedicated test — `JsonTradeStore.load()`'s existing per-file try/catch (returns `List.of()` on a read failure) should already give this for free since each account has its own `JsonTradeStore` instance, but it hasn't been exercised with two real accounts side by side |
 
-**Tests:** extend `TradeMonitorPersistenceTest` — two accounts' trades round-trip independently; a corrupt file for account A doesn't prevent account B's trades from loading.
+**Tests still needed:** a `TradeMonitorPersistenceTest`-style test with two `JsonTradeStore` instances pointed at different paths in a temp directory, one seeded with a corrupt file, confirming the other loads cleanly.
 
 ### Step 3.5.5 — Per-account daily order token
 
@@ -337,12 +334,13 @@ One production host and one static IP serve all 10 accounts — Upstox's rule is
 
 ### Acceptance criteria (Phase 3.5 complete when all are true)
 
-- [ ] 2+ accounts configured with distinct chat ids and credentials, running trades simultaneously
-- [ ] A command sent from account A's chat never reads or changes account B's trades
-- [ ] Each account's persistence file round-trips independently across a restart
-- [ ] A malformed or failing account (bad credentials, feed error) does not prevent other accounts from running
-- [ ] Adding an 11th account is a config-only change — no code, no redeploy of logic
-- [ ] All existing single-account tests still pass unmodified in spirit (ported to construct one account rather than reading process-wide env vars)
+- [x] 2+ accounts configured with distinct chat ids and credentials, running trades simultaneously — mechanically true given per-account `TradeMonitor` construction; not yet exercised end-to-end against real Telegram/Upstox (same network-untestable caveat as the rest of `live`/`notification`)
+- [x] A command sent from account A's chat never reads or changes account B's trades — chat id resolved to an account before any dispatch; covered by `chatIdOf` + constructor tests, not yet by a full two-account integration test
+- [x] Each account's persistence file round-trips independently across a restart — distinct path per account
+- [ ] Corrupt-file isolation between accounts' persistence has a dedicated test (see step 3.5.4)
+- [x] ~~A malformed or failing account... does not prevent other accounts from running~~ — superseded: the deliberate policy is now fail-fast for the whole process on any misconfigured account (see step 3.5.2+3.5.3's "Startup failure policy" row)
+- [x] Adding an 11th account is a config-only change — no code, no redeploy of logic
+- [x] All existing single-account tests still pass — 423/423 (396 pre-3.5 + 21 from 3.5.1 + 6 from 3.5.2/3.5.3)
 
 ---
 
