@@ -2,6 +2,7 @@ package com.kbquants.instrument;
 
 import lombok.Getter;
 
+import java.time.LocalDate;
 import java.util.Objects;
 
 /**
@@ -15,6 +16,12 @@ import java.util.Objects;
  * NIFTY options, for instance). freezeQuantity is the exchange's maximum
  * single-order quantity; orders above it are rejected outright, which is
  * why position sizing caps against it.
+ * <p>
+ * strikePrice and expiry are option-specific: 0 / null for every other
+ * instrument type. Kept here rather than on a separate subtype because
+ * this repo's current scope is NIFTY options only (see
+ * InstrumentMasterLoader and PRODUCT_REQUIREMENTS.md) -- a second
+ * subtype for "everything else" would have no members to hold.
  */
 @Getter
 public final class Instrument {
@@ -27,9 +34,19 @@ public final class Instrument {
     private final int lotSize;
     private final int freezeQuantity;
     private final double tickSize;
+    private final double strikePrice;
+    private final LocalDate expiry;
 
+    /** Non-option instruments: strikePrice 0, expiry null. */
     public Instrument(String tradingSymbol, String instrumentKey, String segment, String instrumentType,
                       String name, int lotSize, int freezeQuantity, double tickSize) {
+        this(tradingSymbol, instrumentKey, segment, instrumentType, name, lotSize, freezeQuantity, tickSize,
+                0, null);
+    }
+
+    public Instrument(String tradingSymbol, String instrumentKey, String segment, String instrumentType,
+                      String name, int lotSize, int freezeQuantity, double tickSize,
+                      double strikePrice, LocalDate expiry) {
         this.tradingSymbol = Objects.requireNonNull(tradingSymbol, "tradingSymbol must not be null");
         this.instrumentKey = Objects.requireNonNull(instrumentKey, "instrumentKey must not be null");
         this.segment = segment;
@@ -38,6 +55,13 @@ public final class Instrument {
         this.lotSize = lotSize;
         this.freezeQuantity = freezeQuantity;
         this.tickSize = tickSize;
+        this.strikePrice = strikePrice;
+        this.expiry = expiry;
+    }
+
+    /** True for a call or put option -- the only instrument type this repo currently tracks. */
+    public boolean isOption() {
+        return "CE".equals(instrumentType) || "PE".equals(instrumentType);
     }
 
     /**

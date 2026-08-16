@@ -80,6 +80,15 @@ public final class InstrumentRegistry {
     }
 
     /**
+     * Every instrument in the registry, keyed by nothing in particular --
+     * used where a caller needs to scan the whole set (e.g. StrikeWindow
+     * picking today's strikes) rather than resolve one symbol.
+     */
+    public Collection<Instrument> all() {
+        return byKey.values();
+    }
+
+    /**
      * Resolves a raw instrument key ("NSE_EQ|INE012A01025") or a trading
      * symbol ("ACC", "nifty50"). Returns empty when unknown, or when a
      * symbol is ambiguous within a single segment.

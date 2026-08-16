@@ -12,22 +12,25 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The end-of-day cutoff decision, tested without waiting for a clock.
+ * The daily-wall-clock-cutoff decision, tested without waiting for a real
+ * clock. Uses end-of-day-shaped values (15:15 IST) since that's the
+ * original use case, but every assertion here is generic -- the same
+ * class also drives the morning instrument-window refresh.
  */
-class EndOfDayScheduleTest {
+class DailyWallClockScheduleTest {
 
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
     private static final LocalTime CUTOFF = LocalTime.of(15, 15);
     private static final LocalDate TODAY = LocalDate.of(2026, 8, 10);
 
-    private static EndOfDaySchedule schedule(Runnable onCutoff) {
-        return new EndOfDaySchedule(CUTOFF, IST, onCutoff);
+    private static DailyWallClockSchedule schedule(Runnable onCutoff) {
+        return new DailyWallClockSchedule("test schedule", CUTOFF, IST, onCutoff);
     }
 
     @Test
     void shouldNotFireBeforeTheCutoff() {
 
-        EndOfDaySchedule schedule = schedule(() -> {});
+        DailyWallClockSchedule schedule = schedule(() -> {});
         schedule.resetLastFired();
 
         assertFalse(schedule.shouldFire(TODAY, LocalTime.of(15, 14, 59)));
@@ -36,7 +39,7 @@ class EndOfDayScheduleTest {
     @Test
     void shouldFireAtTheCutoff() {
 
-        EndOfDaySchedule schedule = schedule(() -> {});
+        DailyWallClockSchedule schedule = schedule(() -> {});
         schedule.resetLastFired();
 
         assertTrue(schedule.shouldFire(TODAY, CUTOFF));
@@ -45,7 +48,7 @@ class EndOfDayScheduleTest {
     @Test
     void shouldFireAfterTheCutoff() {
 
-        EndOfDaySchedule schedule = schedule(() -> {});
+        DailyWallClockSchedule schedule = schedule(() -> {});
         schedule.resetLastFired();
 
         assertTrue(schedule.shouldFire(TODAY, LocalTime.of(15, 30)));
@@ -56,7 +59,7 @@ class EndOfDayScheduleTest {
     void shouldFireOnlyOnceADay() {
 
         AtomicInteger fired = new AtomicInteger();
-        EndOfDaySchedule schedule = schedule(fired::incrementAndGet);
+        DailyWallClockSchedule schedule = schedule(fired::incrementAndGet);
         schedule.resetLastFired();
 
         schedule.checkOnce();
@@ -75,7 +78,7 @@ class EndOfDayScheduleTest {
     void startingAfterTheCutoffShouldNotFireToday() {
 
         AtomicInteger fired = new AtomicInteger();
-        EndOfDaySchedule schedule = schedule(fired::incrementAndGet);
+        DailyWallClockSchedule schedule = schedule(fired::incrementAndGet);
 
         schedule.start();
         try {
@@ -89,7 +92,7 @@ class EndOfDayScheduleTest {
     @Test
     void shouldFireAgainOnTheNextDay() {
 
-        EndOfDaySchedule schedule = schedule(() -> {});
+        DailyWallClockSchedule schedule = schedule(() -> {});
         schedule.resetLastFired();
 
         assertTrue(schedule.shouldFire(TODAY, CUTOFF));
@@ -107,7 +110,7 @@ class EndOfDayScheduleTest {
     @Test
     void shouldSurviveAFailingCallback() {
 
-        EndOfDaySchedule schedule = schedule(() -> {
+        DailyWallClockSchedule schedule = schedule(() -> {
             throw new IllegalStateException("boom");
         });
         schedule.resetLastFired();

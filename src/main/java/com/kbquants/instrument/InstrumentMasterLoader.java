@@ -13,34 +13,43 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.zip.GZIPInputStream;
 
 /**
- * Downloads and parses Upstox's NSE instrument master.
+ * Downloads and parses Upstox's NSE instrument master, keeping only NIFTY
+ * index options.
  * <p>
- * The file is public (no token needed), ~1.9 MB gzipped and ~37 MB of JSON
- * covering 80k+ instruments.
+ * <b>Scope, as of Phase 3.5:</b> this repo currently manages NIFTY 50
+ * option trades only -- not equities, not other indices, not futures. See
+ * PRODUCT_REQUIREMENTS.md for why. That scope is enforced here, at parse
+ * time, rather than left to callers to filter: keeping equities and other
+ * underlyings in memory would cost real heap for records nothing downstream
+ * will ever look at.
  * <p>
- * Refreshed <b>weekly rather than daily</b>, to keep recurring download and
- * parse cost off the VM: the cache is stamped with the most recent
- * Wednesday, so the first run on or after a Wednesday downloads and every
- * run until the next one reads from disk. {@link #load(boolean)} with
- * {@code forceRefresh} bypasses that whenever a mid-week contract needs
- * picking up.
+ * The source file itself is unavoidable overhead: Upstox publishes one
+ * combined file for the whole NSE segment (~1.9 MB gzipped, ~37 MB of JSON,
+ * 80k+ instruments across equities, indices and every F&O underlying) --
+ * there is no NIFTY-only or options-only endpoint, so the download size is
+ * fixed regardless of scope. What scope narrows is what survives parsing:
+ * roughly 40k+ records down to the low hundreds/thousands that are NIFTY
+ * CE/PE contracts, which is what actually matters for parse time, retained
+ * heap, and {@link InstrumentRegistry}'s lookup-index size.
  * <p>
- * The trade-off is deliberate and worth knowing: between refreshes, newly
- * listed contracts are missing and expired ones linger. For weekly-expiry
- * options a Wednesday anchor keeps the cache aligned with the expiry cycle,
- * but a contract listed on Thursday will not resolve until forced.
+ * <b>Refreshed daily</b>, not weekly -- now that the retained dataset is
+ * this small, a daily download is cheap enough that there is no reason to
+ * accept the staleness a weekly cache implies (a contract listed since the
+ * last refresh not resolving, or an expired one lingering). The cache is
+ * stamped with today's date, so the first {@code /track} or process start
+ * of a given day downloads, and every later one that same day reads from
+ * disk. {@link #load(boolean)} with {@code forceRefresh} bypasses that.
  * <p>
- * Parsing streams rather than materialising the whole document, and keeps
- * only the segments worth trading, which discards roughly half the records
- * (NSE_COM and NCD_FO) before they ever reach the heap.
+ * Parsing streams rather than materialising the whole document.
  */
 @Slf4j
 public class InstrumentMasterLoader {
@@ -48,8 +57,27 @@ public class InstrumentMasterLoader {
     private static final String NSE_MASTER_URL =
             "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz";
 
-    /** Equities, indices and F&O -- commodities and corporate debt are not in scope. */
-    private static final Set<String> SEGMENTS_OF_INTEREST = Set.of("NSE_EQ", "NSE_INDEX", "NSE_FO");
+    private static final String OPTIONS_SEGMENT = "NSE_FO";
+    private static final Set<String> OPTION_TYPES = Set.of("CE", "PE");
+
+    /**
+     * Matched against the parsed {@code name} field, which this loader
+     * already relies on elsewhere (see InstrumentAwareTrackRequestResolver's
+     * ambiguity messages) and is confirmed present and populated for F&O
+     * records. Case-insensitive: Upstox's own casing for this field has not
+     * been verified against a live payload in this sandbox (outbound access
+     * to upstox.com is blocked here -- see DEVELOPMENT.md), so matching
+     * loosely is the safer assumption than matching exactly and silently
+     * keeping zero contracts if the real casing differs.
+     */
+    private static final String NIFTY_UNDERLYING = "NIFTY";
+
+    /**
+     * Market-hours zone for interpreting the expiry timestamp as a
+     * calendar date, consistent with every other market-time decision in
+     * this codebase (see TradingToken, EndOfDaySchedule).
+     */
+    private static final ZoneId MARKET_ZONE = ZoneId.of("Asia/Kolkata");
 
     private final String masterUrl;
     private final Path cacheDir;
@@ -79,20 +107,9 @@ public class InstrumentMasterLoader {
         return new InstrumentRegistry(loadInstruments(forceRefresh));
     }
 
-    /**
-     * Most recent Wednesday on or before the given date -- the stamp that
-     * makes the cache weekly. Wednesday itself maps to itself, so a refresh
-     * happens on the first run of each Wednesday and not again until the
-     * next one.
-     */
-    static LocalDate refreshAnchor(LocalDate today) {
-        int daysSinceWednesday = (today.getDayOfWeek().getValue() - DayOfWeek.WEDNESDAY.getValue() + 7) % 7;
-        return today.minusDays(daysSinceWednesday);
-    }
-
     List<Instrument> loadInstruments(boolean forceRefresh) throws IOException {
 
-        Path cached = cacheDir.resolve("NSE-" + refreshAnchor(LocalDate.now()) + ".json.gz");
+        Path cached = cacheFile(LocalDate.now(MARKET_ZONE));
 
         if (forceRefresh || !Files.exists(cached)) {
             Files.createDirectories(cacheDir);
@@ -102,7 +119,7 @@ public class InstrumentMasterLoader {
             }
             deleteStaleCaches(cached);
         } else {
-            log.info("Using cached instrument master {} (refreshes weekly, on Wednesdays)", cached);
+            log.info("Using cached instrument master {} (refreshes daily)", cached);
         }
 
         try (JsonReader reader = new JsonReader(
@@ -111,14 +128,18 @@ public class InstrumentMasterLoader {
         }
     }
 
+    Path cacheFile(LocalDate day) {
+        return cacheDir.resolve("NSE-" + day + ".json.gz");
+    }
+
     private InputStream openMaster() throws IOException {
         URL url = URI.create(masterUrl).toURL();
         return url.openStream();
     }
 
     /**
-     * Last week's master is dead weight once the current one exists;
-     * expired contracts in it are actively misleading.
+     * Yesterday's master is dead weight once today's exists; a strike
+     * window computed from a stale chain is actively misleading.
      */
     private void deleteStaleCaches(Path keep) {
         try (var entries = Files.list(cacheDir)) {
@@ -147,7 +168,8 @@ public class InstrumentMasterLoader {
 
             String tradingSymbol = null, instrumentKey = null, segment = null, instrumentType = null, name = null;
             int lotSize = 0, freezeQuantity = 0;
-            double tickSize = 0;
+            double tickSize = 0, strikePrice = 0;
+            Long expiryMillis = null;
 
             while (reader.hasNext()) {
                 switch (reader.nextName()) {
@@ -159,19 +181,37 @@ public class InstrumentMasterLoader {
                     case "lot_size" -> lotSize = (int) nextDoubleOrZero(reader);
                     case "freeze_quantity" -> freezeQuantity = (int) nextDoubleOrZero(reader);
                     case "tick_size" -> tickSize = nextDoubleOrZero(reader);
+                    // strike_price and expiry: not yet verified against a
+                    // live Upstox payload (see class Javadoc). If Upstox's
+                    // real field names differ, every record below fails the
+                    // isOptionOfInterest check and the registry loads empty
+                    // rather than wrong -- see the defensive skip below.
+                    case "strike_price" -> strikePrice = nextDoubleOrZero(reader);
+                    case "expiry" -> expiryMillis = nextLongOrNull(reader);
                     default -> reader.skipValue();
                 }
             }
             reader.endObject();
 
-            if (tradingSymbol != null && instrumentKey != null && SEGMENTS_OF_INTEREST.contains(segment)) {
-                instruments.add(new Instrument(
-                        tradingSymbol, instrumentKey, segment, instrumentType, name, lotSize, freezeQuantity, tickSize));
+            if (isOptionOfInterest(segment, instrumentType, name, tradingSymbol, instrumentKey)) {
+                LocalDate expiry = expiryMillis == null ? null
+                        : Instant.ofEpochMilli(expiryMillis).atZone(MARKET_ZONE).toLocalDate();
+                instruments.add(new Instrument(tradingSymbol, instrumentKey, segment, instrumentType, name,
+                        lotSize, freezeQuantity, tickSize, strikePrice, expiry));
             }
         }
 
         reader.endArray();
         return instruments;
+    }
+
+    private static boolean isOptionOfInterest(String segment, String instrumentType, String name,
+                                               String tradingSymbol, String instrumentKey) {
+        return tradingSymbol != null
+                && instrumentKey != null
+                && OPTIONS_SEGMENT.equals(segment)
+                && instrumentType != null && OPTION_TYPES.contains(instrumentType)
+                && name != null && NIFTY_UNDERLYING.equalsIgnoreCase(name.trim());
     }
 
     private static String nextStringOrNull(JsonReader reader) throws IOException {
@@ -188,5 +228,13 @@ public class InstrumentMasterLoader {
             return 0;
         }
         return reader.nextDouble();
+    }
+
+    private static Long nextLongOrNull(JsonReader reader) throws IOException {
+        if (reader.peek() == com.google.gson.stream.JsonToken.NULL) {
+            reader.nextNull();
+            return null;
+        }
+        return (long) reader.nextDouble();
     }
 }

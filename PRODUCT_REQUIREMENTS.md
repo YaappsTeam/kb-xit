@@ -4,7 +4,9 @@
 
 ## 1. Product vision
 
-xit-mc is a **trade exit management system** for Indian equity markets. It does not decide what to buy or when to buy it — entry decisions are made by the trader. xit-mc accepts a trade invocation (the user says "I'm in this trade"), monitors the live price, and manages the entire exit lifecycle: protecting capital, locking in profit, and ultimately exiting the position according to configurable rules.
+xit-mc is a **trade exit management system**. It does not decide what to buy or when to buy it — entry decisions are made by the trader. xit-mc accepts a trade invocation (the user says "I'm in this trade"), monitors the live price, and manages the entire exit lifecycle: protecting capital, locking in profit, and ultimately exiting the position according to configurable rules.
+
+**Current instrument scope: NIFTY 50 index options only** — no equities, no futures, no other index or underlying. This is a deliberate MVP narrowing (August 2026), not a permanent architectural limit: the engine itself (exit rules, milestone ladder, position sizing) is instrument-agnostic, and broadening scope later is a change to what `InstrumentMasterLoader` keeps, not a redesign. See §2 and §5 F9 for what this means in practice.
 
 The product answers one question: **given that we are in a trade, when and how do we get out?**
 
@@ -21,9 +23,11 @@ The product answers one question: **given that we are in a trade, when and how d
 - Broker-agnostic design: plug in any broker without backend code changes
 - Backtesting exit strategies against synthetic and historical price paths
 - Placing limit/GTT exit orders at profit milestones (post-MVP)
+- **NIFTY 50 index options** (CE and PE), nearest expiry, 15 strikes above and below spot — see F9
 
-### Out of scope
+### Out of scope (for now)
 
+- **Any instrument other than NIFTY 50 options** — equities, other indices, NIFTY futures, other underlyings' options. Not a permanent exclusion, a deliberate cut to keep what's fetched, parsed and held in memory to the minimum this MVP actually needs; see F9 and REPO_STRATEGY.md for the same reasoning applied elsewhere in this project
 - Entry decisions (which stock, when, at what price) — the user makes this call
 - Stock screening / scanning / discovery
 - Portfolio management across multiple accounts
@@ -244,7 +248,7 @@ One running process serves every trader. What's shared and what isn't:
 
 | Shared across all accounts | Isolated per account |
 |---|---|
-| The JVM process, the Telegram bot token, the instrument master cache, the deployment host's static IP | Upstox credentials + daily order token, open trades, stop-loss/phase/ownership state, risk settings (`CAPITAL_PER_TRADE`, `MAX_RISK_PER_TRADE`), active milestone set, trade persistence file, Telegram chat |
+| The JVM process, the Telegram bot token, the instrument catalog (today's NIFTY strike window — see F9), the deployment host's static IP | Upstox credentials + daily order token, open trades, stop-loss/phase/ownership state, risk settings (`capitalPerTrade`, `maxRiskPerTrade` in `accounts.properties`), active milestone set, trade persistence file, Telegram chat |
 
 - Every inbound Telegram command carries the sender's `chat.id`. The bot resolves it against a small **account registry** (one entry per trader) before dispatching — an unrecognised chat gets a polite refusal, never access to another account's state.
 - Each registered account gets its own `TradeMonitor` instance (its own `TradeContext` map, its own feeds, its own `Notifier` bound to that trader's chat). Nothing about `ExitEngine`, `PhaseManager`, `StopLossEngine`, or the ownership strategies changes — isolation is achieved by running N of them side by side, not by teaching the engine about accounts.
@@ -252,6 +256,20 @@ One running process serves every trader. What's shared and what isn't:
 - The static-IP requirement (F5, "the daily order token") is per Upstox *account*, not per server: all 10 traders can share the same production host's IP, but each must individually register that IP against their own Upstox developer app.
 
 Out of scope for the MVP: self-service onboarding, a web UI for account management, and per-account infrastructure (separate processes/hosts). Ten known traders is small enough that an operator-managed account list is the right amount of engineering.
+
+### F9. Instrument scope: NIFTY 50 options, daily strike window
+
+**Why:** Upstox's instrument master is one combined file for the entire NSE segment — equities, every index, every F&O underlying, 80k+ records, ~37 MB of JSON. Almost none of it is relevant to what this system currently trades. Keeping the full set in memory, and building lookup indices across all of it, costs real parse time and heap for records nothing downstream ever looks at.
+
+**What's kept:** NIFTY 50 index options only (`CE`/`PE`) — not futures, not equities, not any other underlying. Of those, only the nearest expiry, and only the strikes within **15 rungs** of the one closest to that day's spot (so up to 31 strikes × 2 for CE/PE = up to 62 instruments). "Rung" means position in the actually-listed strike list, not a fixed rupee distance, since NIFTY's strike interval isn't constant across the full chain.
+
+**Refresh cadence:** the underlying instrument-master download moved from weekly to **daily** — now that the retained dataset is a few dozen contracts instead of tens of thousands, a daily download is cheap enough that there's no reason to accept a weekly cache's staleness (a newly listed contract not resolving, or an expired one lingering). The strike *window* itself is recomputed **once each morning** (`INSTRUMENT_REFRESH_TIME`, default 08:45 IST, ahead of NSE F&O's 09:15 open) against that morning's spot price — not continuously re-centered through the session. A trader can also force it with `/refresh` at any time.
+
+**What this means for `/track`:** a symbol outside today's window (wrong underlying, a strike too far from spot, an expiry beyond the nearest one) resolves the same way an unknown symbol always has — `unknown instrument: X`. There is no separate rejection message for "known but out of scope"; the instrument simply isn't in the catalog that day.
+
+**Not a permanent limit.** The exit engine, milestone ladder and position sizer are all instrument-agnostic already — broadening scope later (other indices, equities, a wider strike window) is a change to what `InstrumentMasterLoader` and `StrikeWindow` keep, not a redesign of anything downstream.
+
+**Known gap: this scope applies to `/track` only, not broker-fill adoption.** `WATCH_BROKER_FILLS`/`/adopt` builds a trade directly from the broker's `TradeFillEvent` (instrument key, price, quantity all come from the fill itself) and never consults the instrument catalog — so a detected equity or futures position can still be adopted even though typing its symbol into `/track` would fail with `unknown instrument`. Not addressed here because it's a different code path than the one this cut targets (see IMPLEMENTATION_PLAN.md Phase 3.5.7); worth closing before broker-fill watching is relied on for anything beyond NIFTY options.
 
 ## 6. Credential management
 
@@ -272,6 +290,7 @@ No secrets are stored in the repository. A single bot token is process-wide; eve
 | `MARKET_DATA` | `simulated` or `live` (default `simulated`), applies to every account | Process-wide | No |
 | `TRADE_STATE_DIR` | Directory holding each account's `<accountId>.json` persistence file (default `~/.xit-mc/open-trades/`) | Process-wide | No |
 | `WATCH_BROKER_FILLS` / `PLACE_REAL_ORDERS` / `ORDER_PRODUCT` / `EOD_EXIT_TIME` / `EOD_TIMEZONE` | Deployment-wide operational switches — every account runs the same way | Process-wide | No |
+| `INSTRUMENT_REFRESH_TIME` | Wall-clock time (default `08:45`, same zone as `EOD_TIMEZONE`) the daily NIFTY strike-window refresh fires at — see F9 | Process-wide | No |
 
 Per-account fields are never environment variables in the single-account sense (`UPSTOX_API_KEY` etc. no longer make sense once N accounts share a process) — they live in `accounts.properties` instead, one file, gitignored, loaded by `AccountRegistry` at startup. See IMPLEMENTATION_PLAN.md Phase 3.5 for the registry design. The same rule applies regardless of storage shape: nothing lives in git, ever.
 
@@ -322,21 +341,22 @@ Per-account fields are never environment variables in the single-account sense (
 - Trade persistence across restarts; end-of-day forced close (PHASE_4)
 - Not yet exercised against real Upstox/Telegram servers — see §9 risks
 
-### Phase 3.5 — Multi-account support (NEXT)
+### Phase 3.5 — Multi-account support (DONE)
 
 - Account registry: per-trader credentials, chat id, risk settings (F8)
 - One `TradeMonitor` per registered account instead of one process-wide instance
 - Telegram command routing by `chat.id`
 - Per-account trade persistence
+- NIFTY-only instrument scope + daily strike-window refresh (F9) — landed alongside the account work, since both are the same kind of cut: keep only what this MVP actually needs
 - See IMPLEMENTATION_PLAN.md for the step-by-step breakdown
 
 ### Phase 4 — Production hardening
 
-- Deploy to a host with a registered static IP; verify OAuth, both WebSockets, and order placement against real Upstox servers
-- One supervised real order, single lot, before trusting `PLACE_REAL_ORDERS` unattended
-- External configuration (YAML) for all thresholds, if env-var-per-account outgrows itself
-- Historical data feed (candidate: port `market-data-engine` from the `kb-test` repo — see REPO_STRATEGY.md)
-- Structured logging, health checks, graceful shutdown
+- ⏸ **Blocked, deferred:** deploy to a host with a registered static IP; verify OAuth, both WebSockets, and order placement against real Upstox servers — no static IP or VM registered yet (August 2026). Revisit once that infrastructure exists; nothing else in this phase depends on it
+- ⏸ **Blocked, deferred:** one supervised real order, single lot, before trusting `PLACE_REAL_ORDERS` unattended — same static-IP dependency
+- External configuration (YAML) for all thresholds, if env-var-per-account outgrows itself — not blocked, can proceed independently
+- Historical data feed (candidate: port `market-data-engine` from the `kb-test` repo — see REPO_STRATEGY.md) — not blocked
+- Structured logging, health checks, graceful shutdown — not blocked
 
 ## 9. Risks and mitigations
 
