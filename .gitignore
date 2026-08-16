@@ -6,6 +6,11 @@ dependency-reduced-pom.xml
 # in from run.sh.example / run.ps1.example. Never commit these files.
 run.sh
 run.ps1
+
+# Per-trader account registry -- filled in from
+# accounts.properties.example. Contains every trader's Upstox
+# credentials and Telegram chat id. Never commit.
+accounts.properties
 !**/src/main/**/target/
 !**/src/test/**/target/
 
