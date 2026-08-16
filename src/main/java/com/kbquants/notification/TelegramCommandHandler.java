@@ -96,6 +96,7 @@ public class TelegramCommandHandler {
             "",
             "SETTINGS",
             "/status — open trades: entry, breakeven, phase, stop, mode",
+            "/health — feed state and last-tick age per open trade, daily token validity",
             "/ladder [name] — choose the milestone set; bare shows buttons",
             "/risk [amount|off] — rupees a trade may lose at its stop; bare shows the current setting",
             "/refresh — re-fetch the instrument master now",
@@ -370,6 +371,7 @@ public class TelegramCommandHandler {
             case "/track" -> dispatchTrack(parts, text, listener);
             case "/exit" -> dispatchExit(parts, text, listener);
             case "/status" -> listener.onStatusRequested();
+            case "/health" -> listener.onHealthRequested();
             case "/refresh" -> listener.onRefreshInstruments();
             case "/ladder" -> dispatchLadder(parts, listener);
             case "/risk" -> dispatchRisk(parts, text, listener);

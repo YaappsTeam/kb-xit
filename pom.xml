@@ -59,8 +59,9 @@
        #23): one central wrap in TelegramCommandHandler for every
        Telegram-triggered log line, TradeMonitor sets its own context
        for the two feed-triggered entry points (detected fills, price
-       updates). -->
-  <version>0.30.0-SNAPSHOT</version>
+       updates), 0.31.0 /health command (story #23): feed state and
+       last-tick age per open trade, daily token validity. -->
+  <version>0.31.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

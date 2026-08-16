@@ -134,6 +134,11 @@ class TelegramCommandHandlerTest {
         }
 
         @Override
+        public void onHealthRequested() {
+            events.add("health");
+        }
+
+        @Override
         public String accountId() {
             return "test-account";
         }
@@ -247,6 +252,16 @@ class TelegramCommandHandlerTest {
         TelegramCommandHandler.dispatch("/status", listener);
 
         assertEquals(List.of("status"), listener.events);
+    }
+
+    @Test
+    void shouldDispatchHealthCommand() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/health", listener);
+
+        assertEquals(List.of("health"), listener.events);
     }
 
     @Test

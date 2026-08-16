@@ -107,6 +107,15 @@ public interface TelegramCommandListener {
     void onReconcileRequested();
 
     /**
+     * Feed connection state and last-tick age per open trade, plus whether
+     * the daily trading token is currently usable -- queryable health
+     * status per account (PRODUCT_REQUIREMENTS.md / IMPLEMENTATION_PLAN.md
+     * step 4.3). There's no HTTP surface in this app, so this command is
+     * the "queryable" mechanism, the same way /status already is.
+     */
+    void onHealthRequested();
+
+    /**
      * This listener's own account id, for log correlation (see
      * CODING_STANDARDS.md). {@link TelegramCommandHandler} puts it in MDC
      * around dispatch, so every log line a command produces is filterable

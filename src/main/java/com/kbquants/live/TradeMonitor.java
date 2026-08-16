@@ -701,6 +701,7 @@ public class TradeMonitor implements TelegramCommandListener {
         }
 
         trade.lastPrice = currentPrice;
+        trade.lastPriceAt = System.currentTimeMillis();
 
         // Most ticks change nothing worth keeping, so the write is driven
         // by the stop ratcheting or the phase advancing rather than by
@@ -1262,6 +1263,34 @@ public class TradeMonitor implements TelegramCommandListener {
         notifier.send(sb.length() == 0 ? "No active trades" : sb.toString());
     }
 
+    /**
+     * Feed state and last-tick age per open trade, plus the daily token's
+     * usability -- see PRODUCT_REQUIREMENTS.md / IMPLEMENTATION_PLAN.md
+     * step 4.3. Unlike /status this exists purely to answer "is anything
+     * broken right now", not to show trade economics.
+     */
+    @Override
+    public void onHealthRequested() {
+
+        StringBuilder sb = new StringBuilder();
+        for (ActiveTrade trade : activeTrades.values()) {
+            if (trade.context.isClosed()) continue;
+            long ageSeconds = (System.currentTimeMillis() - trade.lastPriceAt) / 1000;
+            sb.append(String.format("%s: feed=%s last tick %ds ago orderId=%s%n",
+                    trade.fill.getInstrumentKey(), trade.feed != null ? "attached" : "stopped",
+                    ageSeconds, trade.fill.getOrderId()));
+        }
+
+        if (sb.length() == 0) {
+            sb.append("No active trades").append(System.lineSeparator());
+        }
+
+        sb.append("Daily trading token: ").append(tradingToken.isUsable() ? "usable" : "not usable")
+                .append(System.lineSeparator());
+
+        notifier.send(sb.toString());
+    }
+
     private void forceExit(ActiveTrade trade) {
         double exitPrice = trade.lastPrice > 0 ? trade.lastPrice : trade.fill.getAveragePrice();
 
@@ -1457,6 +1486,8 @@ public class TradeMonitor implements TelegramCommandListener {
         final TradeCost cost;
         final MilestoneLadder ladder;
         volatile double lastPrice;
+        /** Wall-clock time lastPrice was last set, for the /health command's tick-recency check. */
+        volatile long lastPriceAt;
         volatile boolean breakevenReported;
         volatile boolean stopBreachReported;
         volatile boolean feedFailureReported;
@@ -1472,6 +1503,7 @@ public class TradeMonitor implements TelegramCommandListener {
             this.cost = cost;
             this.ladder = ladder;
             this.lastPrice = fill.getAveragePrice();
+            this.lastPriceAt = System.currentTimeMillis();
         }
     }
 }
