@@ -297,4 +297,46 @@ class TradeMonitorPersistenceTest {
 
         assertTrue(new JsonTradeStore(file).load().isEmpty());
     }
+
+    /**
+     * Multi-account isolation (PRODUCT_REQUIREMENTS.md F8, IMPLEMENTATION_PLAN.md
+     * Phase 3.5.4): each account gets its own JsonTradeStore pointed at its own
+     * file under TRADE_STATE_DIR/&lt;accountId&gt;.json (see Main). A corrupt file
+     * for one account must not stop another account's trades from loading --
+     * there is no shared state between two JsonTradeStore instances beyond the
+     * directory they happen to share, so this mostly proves the negative:
+     * nothing (a static cache, a shared file handle) accidentally links them.
+     */
+    @Test
+    void corruptFileForOneAccountShouldNotAffectAnothersInTheSameDirectory(@TempDir Path dir) throws Exception {
+
+        Path aliceFile = dir.resolve("alice.json");
+        Path bobFile = dir.resolve("bob.json");
+
+        java.nio.file.Files.writeString(aliceFile, "{ this is not json");
+
+        TradeSnapshot bobsTrade = new TradeSnapshot();
+        bobsTrade.setOrderId("order-1");
+        bobsTrade.setInstrumentKey("NSE_FO|45148");
+        bobsTrade.setDisplaySymbol("NIFTY 25000 CE 18 AUG 26");
+        bobsTrade.setEntryPrice(55.30);
+        bobsTrade.setBasePrice(55.49);
+        bobsTrade.setQuantity(845);
+        bobsTrade.setCurrentStopLoss(33.18);
+        bobsTrade.setPhase("PHASE_2");
+        bobsTrade.setLadderName("OPTIONS");
+        bobsTrade.setMonitorMode("MANAGED");
+        bobsTrade.setNextMilestoneIndex(3);
+        new JsonTradeStore(bobFile).save(List.of(bobsTrade));
+
+        JsonTradeStore aliceStore = new JsonTradeStore(aliceFile);
+        JsonTradeStore bobStore = new JsonTradeStore(bobFile);
+
+        assertTrue(aliceStore.load().isEmpty(), "alice's corrupt file should load empty, not throw");
+
+        List<TradeSnapshot> bobsLoaded = bobStore.load();
+        assertEquals(1, bobsLoaded.size(), "bob's valid file must load unaffected by alice's corrupt one");
+        assertEquals("order-1", bobsLoaded.get(0).getOrderId());
+        assertEquals("NIFTY 25000 CE 18 AUG 26", bobsLoaded.get(0).getDisplaySymbol());
+    }
 }
