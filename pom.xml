@@ -36,8 +36,10 @@
        account, Telegram commands routed by chat id, per-account
        trade persistence (Phase 3.5.2/3.5.3), 0.26.0 instrument scope
        narrowed to NIFTY 50 options only: nearest expiry, 15 strikes
-       each side of spot, daily strike-window refresh (Phase 3.5.7). -->
-  <version>0.26.0-SNAPSHOT</version>
+       each side of spot, daily strike-window refresh (Phase 3.5.7),
+       0.26.1 corrupt-file isolation test between two accounts'
+       persistence, closing the last open Phase 3.5 acceptance item. -->
+  <version>0.26.1-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

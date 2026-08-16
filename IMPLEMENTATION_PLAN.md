@@ -314,15 +314,13 @@ This phase exists because the product target changed from "one developer-trader"
 
 **Tests:** `TelegramCommandHandlerTest` gained `chatIdOf` unit tests (chat present / chat null) and constructor validation tests (blank/null bot token, null resolver). `AccountRegistry`/`TraderAccount` tests from 3.5.1 already cover the data layer this reads from. `Main`'s wiring itself follows the project's existing convention of not being unit-tested (thin `main()`; manually verified) — see DEVELOPMENT.md §7's note on the single-account `Main`, which the same rule now extends to.
 
-### Step 3.5.4 — Per-account persistence (path isolation shipped with 3.5.2/3.5.3; full acceptance criteria still open)
+### Step 3.5.4 — Per-account persistence (DONE)
 
 | Item | Detail | Status |
 |---|---|---|
 | Refactor | `Main` passes `new JsonTradeStore(path)` with a per-account path, `<TRADE_STATE_DIR>/<accountId>.json` (default dir `~/.xit-mc/open-trades/`) — `JsonTradeStore` itself needed no change, its `Path`-accepting constructor already existed | Shipped |
 | Restart behavior | Every account's open trades restore to that account only, since each has a distinct file | Shipped |
-| Corrupt-file isolation | A corrupt file for one account must not block another account's trades from loading | Not yet covered by a dedicated test — `JsonTradeStore.load()`'s existing per-file try/catch (returns `List.of()` on a read failure) should already give this for free since each account has its own `JsonTradeStore` instance, but it hasn't been exercised with two real accounts side by side |
-
-**Tests still needed:** a `TradeMonitorPersistenceTest`-style test with two `JsonTradeStore` instances pointed at different paths in a temp directory, one seeded with a corrupt file, confirming the other loads cleanly.
+| Corrupt-file isolation | A corrupt file for one account must not block another account's trades from loading | Shipped — `corruptFileForOneAccountShouldNotAffectAnothersInTheSameDirectory` in `TradeMonitorPersistenceTest`: two `JsonTradeStore`s in one temp directory, one file corrupted, confirms the other's valid trade still loads untouched. Mostly proved the negative (no static cache or shared handle links two instances) since `JsonTradeStore.load()`'s existing per-file try/catch already gave this for free |
 
 ### Step 3.5.5 — Per-account daily order token
 
@@ -359,16 +357,18 @@ One production host and one static IP serve all 10 accounts — Upstox's rule is
 - [ ] Field names (`strike_price`, `expiry`) verified against a real Upstox payload — blocked on the same static-IP/network-access gap as Phase 4; revisit together
 - [ ] Known gap, not yet closed: broker-fill adoption (`WATCH_BROKER_FILLS`/`/adopt`) bypasses the instrument catalog entirely (it builds a trade from the fill event directly), so a detected non-NIFTY position can still be adopted even though `/track`ing it manually would fail — see PRODUCT_REQUIREMENTS.md F9
 
-### Acceptance criteria (Phase 3.5 complete when all are true)
+### Acceptance criteria (Phase 3.5: all true — phase complete)
 
 - [x] 2+ accounts configured with distinct chat ids and credentials, running trades simultaneously — mechanically true given per-account `TradeMonitor` construction; not yet exercised end-to-end against real Telegram/Upstox (same network-untestable caveat as the rest of `live`/`notification`)
 - [x] A command sent from account A's chat never reads or changes account B's trades — chat id resolved to an account before any dispatch; covered by `chatIdOf` + constructor tests, not yet by a full two-account integration test
 - [x] Each account's persistence file round-trips independently across a restart — distinct path per account
-- [ ] Corrupt-file isolation between accounts' persistence has a dedicated test (see step 3.5.4)
+- [x] Corrupt-file isolation between accounts' persistence has a dedicated test — `corruptFileForOneAccountShouldNotAffectAnothersInTheSameDirectory` (step 3.5.4)
 - [x] ~~A malformed or failing account... does not prevent other accounts from running~~ — superseded: the deliberate policy is now fail-fast for the whole process on any misconfigured account (see step 3.5.2+3.5.3's "Startup failure policy" row)
 - [x] Adding an 11th account is a config-only change — no code, no redeploy of logic
-- [x] All existing single-account tests still pass — 444/444 (396 pre-3.5 + 21 from 3.5.1 + 6 from 3.5.2/3.5.3 + 21 from 3.5.7)
+- [x] All existing single-account tests still pass — 445/445 (396 pre-3.5 + 21 from 3.5.1 + 6 from 3.5.2/3.5.3 + 21 from 3.5.7 + 1 from the corrupt-file-isolation test)
 - [x] Instrument scope narrowed to NIFTY 50 options only, daily-refreshed strike window (step 3.5.7)
+
+**Phase 3.5 is done.** Remaining open items are tracked individually, not blocking: field-name verification against a live Upstox payload (step 3.5.7), and the broker-fill-adoption instrument-scope gap (PRODUCT_REQUIREMENTS.md F9) — both revisit once there's network access to a real Upstox endpoint. Next up: Phase 4, per its own status note above (kb-test merge and external config are unblocked now; real-order verification stays deferred).
 
 ---
 
