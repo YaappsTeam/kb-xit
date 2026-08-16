@@ -20,7 +20,9 @@ com.kbquants
 ├── config         Configuration loading and schema
 ├── domain         Core value/state objects (immutable where possible, includes MilestoneLadder)
 ├── engine         Exit rules pipeline (deterministic, no I/O)
+├── instrument     NIFTY-options instrument master, catalog, strike windowing
 ├── live           Broker-specific implementations (Upstox) and orchestration (TradeMonitor)
+├── marketdata     Historical-candle retrieval (ported from kb-test; not yet wired into Main — see below)
 ├── notification   Alerting, Telegram bot (inbound commands + outbound notifications)
 ├── session        Broker-agnostic interfaces (MarketDataFeed, OrderFillFeed, PriceListener, etc.)
 └── simulation     Synthetic data, batch execution, reporting
@@ -32,6 +34,16 @@ com.kbquants
 - No circular dependencies between packages. The dependency direction is: `live` / `simulation` -> `session` -> `engine` -> `domain`. `notification` is a leaf — nothing depends on it except the orchestrators.
 - `engine` and `domain` must never import from `live`, `notification`, or `simulation`. They are the pure core.
 - **Broker-agnostic interfaces live in `session`**, not `live`. The `session` package defines `MarketDataFeed`, `OrderFillFeed`, `PriceListener`, `TradeFillListener`, and `TradeFillEvent`. The `live` package holds only broker-specific implementations (e.g., `UpstoxMarketDataFeed`, `UpstoxOrderFillFeed`).
+- **`marketdata` is self-contained and currently unwired.** It defines its own `HistoricalCandleFeed` interface (pull-based: fetch a candle range) rather than implementing `session.MarketDataFeed` (push-based: live ticks) — the two solve different problems and forcing one onto the other would be a worse fit than two small interfaces. Nothing in `live`, `engine`, or `session` may depend on `marketdata` until a story actually wires historical data into the exit engine (tracked as story #24); until then it is ported code waiting on a consumer, not dead code to delete.
+
+### A note on the modules this repo doesn't have yet
+
+`docs/future-products/` (ported from kb-test) describes a larger signal-generation ecosystem — indicators, strategy composition, entry engine, scanner, orchestrator — that this repo does not build today; this repo's scope is the exit engine plus the market-data/instrument groundwork it needs. Two principles from that plan are worth keeping in mind if and when those modules get built here, rather than as a separate product:
+
+- **Registry pattern over type-switching.** New pluggable strategies/indicators should register into a lookup (as `MilestoneLadder`'s named sets already do for exit ladders — see §3), not get selected via `switch`/`if-else` chains on a type field.
+- **Event-driven, not directly coupled, cross-module communication.** A future entry engine or scanner should publish something the exit engine subscribes to, not call into `TradeMonitor` directly — the same reasoning that already keeps `engine` and `domain` free of `live`/`notification`/`simulation` imports (see the package rules above).
+
+Everything else in kb-test's retired `AGENTS.md` (the 90%-coverage mandate, the strict `TradeContext`-only exit-engine sandboxing, the SIGNALLED→...→COMPLETED state machine) was written for a bigger multi-engine system this repo isn't building yet, so it stays there rather than being imposed on this codebase's actual size.
 
 ## 3. Class design
 
