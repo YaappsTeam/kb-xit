@@ -2,7 +2,7 @@ package com.kbquants.marketdata.broker.upstox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kbquants.marketdata.config.MarketDataConfig;
-import com.kbquants.marketdata.feed.MarketDataFeed;
+import com.kbquants.marketdata.feed.HistoricalCandleFeed;
 import com.kbquants.marketdata.model.Candle;
 import com.kbquants.marketdata.model.Timeframe;
 import org.slf4j.Logger;
@@ -12,18 +12,18 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * Upstox implementation of {@link MarketDataFeed}. Currently supports historical
- * candle retrieval; live streaming is a later phase.
+ * Upstox implementation of {@link HistoricalCandleFeed}. Currently supports
+ * historical candle retrieval; live streaming is a later phase.
  */
-public class UpstoxMarketDataFeed implements MarketDataFeed {
+public class UpstoxHistoricalCandleFeed implements HistoricalCandleFeed {
 
-    private static final Logger log = LoggerFactory.getLogger(UpstoxMarketDataFeed.class);
+    private static final Logger log = LoggerFactory.getLogger(UpstoxHistoricalCandleFeed.class);
 
     private final UpstoxHistoricalClient client;
     private final UpstoxCandleParser parser;
     private final ObjectMapper objectMapper;
 
-    public UpstoxMarketDataFeed(MarketDataConfig config, ObjectMapper objectMapper) {
+    public UpstoxHistoricalCandleFeed(MarketDataConfig config, ObjectMapper objectMapper) {
         this.client = new UpstoxHistoricalClient(config);
         this.parser = new UpstoxCandleParser();
         this.objectMapper = objectMapper;

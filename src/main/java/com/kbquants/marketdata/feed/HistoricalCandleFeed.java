@@ -7,7 +7,7 @@ import com.kbquants.marketdata.model.Timeframe;
 import java.time.LocalDate;
 import java.util.List;
 
-public interface MarketDataFeed {
+public interface HistoricalCandleFeed {
 
     // HISTORICAL
     List<Candle> getHistoricalCandles(String symbol, Timeframe timeframe, LocalDate from, LocalDate to);
