@@ -1,0 +1,17 @@
+<configuration>
+
+    <!-- One JSON object per log line on stdout. accountId/orderId are MDC
+         keys set around per-account and per-trade activity, see
+         CODING_STANDARDS.md and TradeMonitor. No key allowlist is
+         configured here, so whatever MDC keys are present just show up in
+         the object, keeping this file from drifting away from the code
+         that sets them. -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+</configuration>
