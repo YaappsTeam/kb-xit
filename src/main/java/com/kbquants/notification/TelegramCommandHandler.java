@@ -3,6 +3,7 @@ package com.kbquants.notification;
 import com.google.gson.Gson;
 import com.kbquants.domain.MonitorMode;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 
 import java.io.IOException;
 import java.net.URI;
@@ -95,6 +96,7 @@ public class TelegramCommandHandler {
             "",
             "SETTINGS",
             "/status — open trades: entry, breakeven, phase, stop, mode",
+            "/health — feed state and last-tick age per open trade, daily token validity",
             "/ladder [name] — choose the milestone set; bare shows buttons",
             "/risk [amount|off] — rupees a trade may lose at its stop; bare shows the current setting",
             "/refresh — re-fetch the instrument master now",
@@ -234,7 +236,7 @@ public class TelegramCommandHandler {
             return;
         }
 
-        dispatch(message.text, listener.get());
+        withAccountLogContext(listener.get(), () -> dispatch(message.text, listener.get()));
     }
 
     private void handleCallback(TelegramCallbackQuery callback) {
@@ -260,7 +262,23 @@ public class TelegramCommandHandler {
             return;
         }
 
-        dispatchCallback(callback.data, listener.get());
+        withAccountLogContext(listener.get(), () -> dispatchCallback(callback.data, listener.get()));
+    }
+
+    /**
+     * Every command/callback this handler dispatches funnels through here
+     * or {@link #handleMessage}, so this is the single place accountId
+     * needs to enter MDC for log correlation to cover all of {@link
+     * TelegramCommandListener}'s ~24 methods -- see
+     * {@link TelegramCommandListener#accountId()}.
+     */
+    static void withAccountLogContext(TelegramCommandListener listener, Runnable action) {
+        MDC.put("accountId", listener.accountId());
+        try {
+            action.run();
+        } finally {
+            MDC.remove("accountId");
+        }
     }
 
     static String chatIdOf(TelegramMessage message) {
@@ -353,6 +371,7 @@ public class TelegramCommandHandler {
             case "/track" -> dispatchTrack(parts, text, listener);
             case "/exit" -> dispatchExit(parts, text, listener);
             case "/status" -> listener.onStatusRequested();
+            case "/health" -> listener.onHealthRequested();
             case "/refresh" -> listener.onRefreshInstruments();
             case "/ladder" -> dispatchLadder(parts, listener);
             case "/risk" -> dispatchRisk(parts, text, listener);

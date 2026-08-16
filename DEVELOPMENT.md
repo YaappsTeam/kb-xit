@@ -168,7 +168,7 @@ TelegramCredentials.fromEnv()
 
 - Reads `TRADING_MODE` env var (default `paper`); any other value logs an error and exits — live mode isn't wired yet (Phase 3).
 - `TelegramCredentials.fromEnv()` fails fast with a clear `IllegalStateException` if `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` are missing (verified by running the packaged jar with no env vars set).
-- A JVM shutdown hook stops the command handler cleanly.
+- A JVM shutdown hook stops the command handler and calls `TradeMonitor#shutdown` for every registered account, closing each open trade's feed and logging its final state (story #23).
 - `mvn package` (via `maven-shade-plugin`) produces `target/xit-mc-1.0-SNAPSHOT.jar`, a runnable fat jar with all dependencies bundled and `Main-Class` set — verified to build and to fail-fast correctly with/without credentials in this sandbox (the actual Telegram network call is untestable here, same caveat as always).
 
 Not unit-tested (it's a thin wiring `main()`, consistent with the project's testing rules — see CODING_STANDARDS.md §9); manually verified via `java -jar` runs.

@@ -181,7 +181,13 @@ public class Main {
                         + "Send /track <symbol> to Telegram to begin.",
                 liveData ? "LIVE Upstox" : "simulated", monitorsByAccountId.size(), monitorsByAccountId.keySet());
 
-        Runtime.getRuntime().addShutdownHook(new Thread(commandHandler::stop));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            commandHandler.stop();
+            // Every account's feeds get closed and final trade states
+            // logged here, not just the Telegram poller -- see
+            // TradeMonitor#shutdown and IMPLEMENTATION_PLAN.md step 4.3.
+            monitorsByAccountId.values().forEach(TradeMonitor::shutdown);
+        }));
     }
 
     /**
@@ -253,7 +259,7 @@ public class Main {
         // sharedCatalog is null and there is nothing to check against.
         return new TradeMonitor(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder,
                 chargesService, riskSettings, tradeStore, exitOrderPlacer, tradingToken, watchBrokerFills,
-                positionQuery, Optional.ofNullable(sharedCatalog));
+                positionQuery, Optional.ofNullable(sharedCatalog), account.getAccountId());
     }
 
     /**

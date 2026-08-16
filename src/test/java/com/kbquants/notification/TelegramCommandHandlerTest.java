@@ -132,6 +132,16 @@ class TelegramCommandHandlerTest {
         public void onReconcileRequested() {
             events.add("reconcile");
         }
+
+        @Override
+        public void onHealthRequested() {
+            events.add("health");
+        }
+
+        @Override
+        public String accountId() {
+            return "test-account";
+        }
     }
 
     @Test
@@ -242,6 +252,16 @@ class TelegramCommandHandlerTest {
         TelegramCommandHandler.dispatch("/status", listener);
 
         assertEquals(List.of("status"), listener.events);
+    }
+
+    @Test
+    void shouldDispatchHealthCommand() {
+
+        RecordingListener listener = new RecordingListener();
+
+        TelegramCommandHandler.dispatch("/health", listener);
+
+        assertEquals(List.of("health"), listener.events);
     }
 
     @Test
@@ -650,5 +670,32 @@ class TelegramCommandHandlerTest {
         TelegramCommandHandler handler = new TelegramCommandHandler("token", chatId -> Optional.empty());
 
         assertNotNull(handler);
+    }
+
+    // ---- MDC log correlation (story #23) ----
+
+    @Test
+    void withAccountLogContextShouldPutTheListenersAccountIdInMdcForTheDurationOfTheAction() {
+
+        RecordingListener listener = new RecordingListener();
+        java.util.concurrent.atomic.AtomicReference<String> seenDuring = new java.util.concurrent.atomic.AtomicReference<>();
+
+        TelegramCommandHandler.withAccountLogContext(listener, () -> seenDuring.set(org.slf4j.MDC.get("accountId")));
+
+        assertEquals("test-account", seenDuring.get());
+        assertNull(org.slf4j.MDC.get("accountId"), "must not leak into whatever runs next on this thread");
+    }
+
+    @Test
+    void withAccountLogContextShouldClearMdcEvenIfTheActionThrows() {
+
+        RecordingListener listener = new RecordingListener();
+
+        assertThrows(RuntimeException.class, () ->
+                TelegramCommandHandler.withAccountLogContext(listener, () -> {
+                    throw new RuntimeException("boom");
+                }));
+
+        assertNull(org.slf4j.MDC.get("accountId"));
     }
 }

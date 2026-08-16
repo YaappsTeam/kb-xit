@@ -419,11 +419,13 @@ All thresholds, percentages, and the milestone ladder configurable via `config.y
 
 Auto-transition to PHASE_4 at configurable EOD time (e.g., 15:15 IST). Force exit all open trades.
 
-### Step 4.3 — Observability
+### Step 4.3 — Observability — DONE
 
-- Structured logging with `tradeId` in MDC
-- Health checks (WebSocket state, last tick recency, token validity)
-- Graceful shutdown (close feeds, log final trade states)
+Landed via story #23.
+
+- Structured logging: `src/main/resources/logback.xml` wires `logstash-logback-encoder` for JSON stdout. `accountId` enters MDC once, centrally, in `TelegramCommandHandler.withAccountLogContext` (wraps the single dispatch choke point, covering all ~24 `TelegramCommandListener` methods); `TradeMonitor` sets `accountId`/`orderId` itself for the two feed-triggered entry points that don't go through Telegram dispatch (detected fills, price updates).
+- Health checks: `/health` command reports per-trade feed attachment and last-tick age (new `ActiveTrade.lastPriceAt`), plus `TradingToken.isUsable()` for daily-token validity. No HTTP surface exists in this app, so a command is the "queryable" mechanism, same as `/status`.
+- Graceful shutdown: `TradeMonitor#shutdown` stops every open trade's feed and logs its final state; `Main`'s shutdown hook calls it for every account, not just the Telegram poller.
 
 ### Step 4.4 — Historical data feed — DONE
 
@@ -433,7 +435,7 @@ Landed via story #24. **Differently than originally planned here** — see `REPO
 
 - [ ] All thresholds configurable without code changes
 - [ ] Trades auto-close at EOD
-- [ ] Health status queryable; logs carry trade correlation IDs
+- [x] Health status queryable; logs carry trade correlation IDs (story #23)
 - [x] Historical backtesting works against real past data (story #24)
 
 ---
