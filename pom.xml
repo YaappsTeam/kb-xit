@@ -49,8 +49,13 @@
        merged in with full history preserved (story #20, step 4.0):
        new com.kbquants.marketdata package (HistoricalCandleFeed,
        UpstoxHistoricalCandleFeed), docs/future-products/, planning
-       docs updated to reflect the merge as done. -->
-  <version>0.28.0-SNAPSHOT</version>
+       docs updated to reflect the merge as done, 0.29.0 historical
+       price paths for backtesting (story #24): CandleToPricePath
+       converts ported candles to the same price-path shape
+       StochasticPricePathGenerator produces, HistoricalPricePathSource
+       fetches and scopes them to today's tracked NIFTY-options window
+       the same way TradeMonitor scopes live fills. -->
+  <version>0.29.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>
