@@ -44,9 +44,13 @@
        is never offered, adopted or auto-adopted, 0.27.1 pom
        reconciliation preflight for the kb-test merge (story #20):
        Lombok bumped to 1.18.42, JUnit to 5.10.2, jackson-databind
-       2.21.1 added for the incoming Upstox historical-candle parser.
-       -->
-  <version>0.27.1-SNAPSHOT</version>
+       2.21.1 added for the incoming Upstox historical-candle parser,
+       0.28.0 kb-test's market-data-engine and future-products docs
+       merged in with full history preserved (story #20, step 4.0):
+       new com.kbquants.marketdata package (HistoricalCandleFeed,
+       UpstoxHistoricalCandleFeed), docs/future-products/, planning
+       docs updated to reflect the merge as done. -->
+  <version>0.28.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

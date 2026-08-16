@@ -1,18 +1,14 @@
 # Repo strategy: kb-xit vs. kb-test
 
-> Added August 2026. Confirmed as a merge (not a park) later that month.
+> Added August 2026. Confirmed as a merge (not a park) later that month. **Merged** the same
+> month — see "Merge record" below.
 
 ## Decision
 
 **One repo going forward: `kb-xit`.** It reached a working, tested exit-management app
-(396 tests, live Upstox market data, real order-placement code) while `kb-test` stayed at
-mostly-empty scaffolding. All active development happens here; `kb-test` will be merged into
-this repo and then archived.
-
-The merge is **scheduled with Phase 4** in `IMPLEMENTATION_PLAN.md` — see step 4.0 there —
-so it lands exactly when the ported code (`market-data-engine`) is needed for the historical
-backtest feed, not before, and doesn't add build risk to the Phase 3.5 multi-account work
-that actually blocks going to production.
+(450 tests at merge time, live Upstox market data, real order-placement code) while
+`kb-test` stayed at mostly-empty scaffolding. All active development happens here; `kb-test`
+has been merged into this repo (story #20) and is pending archival on GitHub (subtask #36).
 
 ## What is being merged
 
@@ -51,31 +47,40 @@ them without new discussion.
    the history/reference of `AGENTS.md` and the docs that shaped the original architecture
    thinking. Deletion is irreversible and buys nothing over archiving.
 
-## Merge preflight (known collision points)
+## Merge record
 
-Recorded now so the person doing the merge (or the next AI session) doesn't rediscover them
-under time pressure:
+Done via story #20 / `IMPLEMENTATION_PLAN.md` step 4.0. What actually happened, vs. the
+preflight predictions below:
 
-- **Interface name collision.** Both repos define a `MarketDataFeed` interface — `kb-xit`'s
-  at `com.kbquants.session.MarketDataFeed` (the one every broker implementation already
-  plugs into), `kb-test`'s at `com.kbquants.marketdata.feed.MarketDataFeed` (a different,
-  historical-candle-shaped one). The ported code must implement `kb-xit`'s existing
-  interface, not add a second competing one.
-- **Class name collision.** Both repos define an `UpstoxMarketDataFeed` — live WebSocket
-  ticks in `kb-xit`, historical candles in `kb-test`. Rename the ported one on the way in
-  (e.g. `UpstoxHistoricalCandleFeed`).
-- **Dependency version drift.** Lombok `1.18.30` (kb-xit) vs `1.18.42` (kb-test); JUnit
-  `5.10.0` vs `5.10.2`; `kb-test` also declares `jackson-databind` and a bare
-  `slf4j-api`/`slf4j-simple` pair not currently in `kb-xit`. Reconcile deliberately during
-  the merge, don't assume-latest.
-- **`AGENTS.md` scope.** `kb-test`'s `AGENTS.md` mandates a repo-wide event-driven +
-  registry-only architecture that this codebase does not follow (and does not need to,
-  for its scope). Do not carry `AGENTS.md` across as-is — either fold anything still
-  relevant into `CODING_STANDARDS.md` and drop the rest, or leave it behind in the archived
-  `kb-test` repo entirely.
+- **Interface collision — resolved differently than planned.** The preflight assumed the
+  ported code should implement `kb-xit`'s existing `session.MarketDataFeed`. Once the code
+  was actually in front of us, that turned out to be a poor fit: `session.MarketDataFeed` is
+  push-based (`start(PriceListener)`, live ticks), while the ported interface is pull-based
+  (`getHistoricalCandles(...)`, a bounded historical range) — genuinely different shapes for
+  different problems. Forcing one onto the other would have been a worse reconciliation than
+  keeping them separate, so the ported interface was kept as its own thing and just renamed
+  away from the confusing shared name: `com.kbquants.marketdata.feed.MarketDataFeed` ->
+  `HistoricalCandleFeed`. See `CODING_STANDARDS.md` §2 for the package boundary this leaves.
+- **Class collision — resolved as planned.** `com.kbquants.marketdata.broker.upstox.
+  UpstoxMarketDataFeed` -> `UpstoxHistoricalCandleFeed`; `kb-xit`'s existing live-tick
+  `com.kbquants.live.UpstoxMarketDataFeed` is untouched.
+- **Dependency version drift — resolved as planned.** Lombok bumped `1.18.30` -> `1.18.42`,
+  JUnit `5.10.0` -> `5.10.2`, `jackson-databind 2.21.1` added. `slf4j-api`/`slf4j-simple`
+  were not added — `kb-xit` already carries `slf4j-api` transitively via `logback-classic`,
+  and `logback-classic` already serves as the test-time SLF4J binding, so adding
+  `slf4j-simple` would only have introduced a duplicate-binding warning.
+- **`AGENTS.md` — resolved as planned.** Not carried across (the filter-repo pass only kept
+  `market-data-engine/` and `docs/`, and `AGENTS.md` lived outside both). Registry-pattern
+  and event-driven-communication principles, scoped to modules this repo doesn't build yet,
+  folded into `CODING_STANDARDS.md`; the rest left behind in the archived `kb-test`.
+- **Package name — kept as-is, not renamed.** The "chosen shapes" section below floated
+  `com.kbquants.historical` as an example internal-package name. The ported code's actual
+  package, `com.kbquants.marketdata`, was kept unchanged instead — renaming ~20 files'
+  package declarations for a cosmetic difference wasn't worth doing.
+- **Verification: 467/467 tests pass** (450 kb-xit + 17 ported), full history and authorship
+  preserved via `git filter-repo` + `git merge --allow-unrelated-histories`.
 
 ## What this document is not
 
-Not an implementation of the merge. See `IMPLEMENTATION_PLAN.md` step 4.0 for the ordered
-step-by-step, and don't act on any of the "preflight" bullets above without checking that
-step's acceptance criteria first.
+Not an implementation log beyond the "merge record" above. See `IMPLEMENTATION_PLAN.md` step
+4.0 for the ordered step-by-step and its acceptance criteria.
