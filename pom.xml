@@ -64,8 +64,10 @@
        graceful shutdown (story #23): TradeMonitor#shutdown closes
        every open trade's feed and logs its final state; Main's
        shutdown hook calls it for every account, not just the
-       Telegram poller. -->
-  <version>0.32.0-SNAPSHOT</version>
+       Telegram poller, 0.32.1 GIT_WORKFLOW.md (story #54): portable
+       description of this session's branch/commit/PR/issue-tracking
+       workflow, for reuse in other repositories. -->
+  <version>0.32.1-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

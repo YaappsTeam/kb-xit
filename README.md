@@ -500,3 +500,4 @@ mvn test -Dtest=PhaseManagerTest   # a single test class
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Detailed snapshot of what's implemented, package by package |
 | [REPO_STRATEGY.md](REPO_STRATEGY.md) | Why this repo is the product, and what the `kb-test` repo is for |
 | [docs/future-products/](docs/future-products/README.md) | Ported planning docs for signal-generation products this repo doesn't build yet |
+| [GIT_WORKFLOW.md](GIT_WORKFLOW.md) | Portable description of the branch/commit/PR/issue-tracking workflow this repo's history follows — copy it into other repositories as-is |
