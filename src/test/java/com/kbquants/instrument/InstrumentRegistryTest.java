@@ -100,4 +100,9 @@ class InstrumentRegistryTest {
     void shouldCountLoadedInstruments() {
         assertEquals(6, registry().size());
     }
+
+    @Test
+    void allShouldReturnEveryLoadedInstrument() {
+        assertEquals(6, registry().all().size());
+    }
 }

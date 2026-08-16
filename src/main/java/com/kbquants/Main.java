@@ -10,7 +10,7 @@ import com.kbquants.instrument.InstrumentAwareTrackRequestResolver;
 import com.kbquants.instrument.InstrumentCatalog;
 import com.kbquants.instrument.InstrumentMasterLoader;
 import com.kbquants.instrument.PositionSizer;
-import com.kbquants.live.EndOfDaySchedule;
+import com.kbquants.live.DailyWallClockSchedule;
 import com.kbquants.live.TradeMonitor;
 import com.kbquants.live.UpstoxChargesService;
 import com.kbquants.live.UpstoxDataCredentials;
@@ -33,6 +33,7 @@ import com.kbquants.session.NoOpOrderFillFeed;
 import com.kbquants.session.OrderFillFeed;
 import com.kbquants.session.PaperExitOrderPlacer;
 import com.kbquants.session.PositionQuery;
+import com.kbquants.session.QuoteService;
 import com.kbquants.session.SimulatedMarketDataFeed;
 import com.kbquants.session.TradeFillEvent;
 import com.kbquants.session.TradeStore;
@@ -62,7 +63,14 @@ import java.util.function.Function;
  * see PRODUCT_REQUIREMENTS.md section F8 and IMPLEMENTATION_PLAN.md Phase
  * 3.5. What IS shared across every account: the JVM process, the Telegram
  * bot token (routing to the right account happens per-chat-id in
- * {@link TelegramCommandHandler}), and the instrument master cache.
+ * {@link TelegramCommandHandler}), and the instrument catalog.
+ * <p>
+ * That catalog's own scope is deliberately narrow right now: NIFTY 50
+ * index options only, no futures, no equities, no other underlying --
+ * see {@link InstrumentCatalog} and PRODUCT_REQUIREMENTS.md. It's
+ * recomputed once each morning ({@code INSTRUMENT_REFRESH_TIME}, default
+ * 08:45 IST) against that day's spot, rather than continuously
+ * re-centered through the session.
  * <p>
  * Two switches, deliberately kept orthogonal and process-wide (every
  * account runs the same way, at least until a reason to split them
@@ -130,9 +138,13 @@ public class Main {
 
         // One download, shared by every account -- the instrument master is
         // public market data, not a per-account credential, so there is
-        // nothing to isolate here and no reason to fetch it N times.
+        // nothing to isolate here and no reason to fetch it N times. The
+        // one spot-price lookup this needs (see InstrumentCatalog) is made
+        // with the first registered account's read-only Analytics Token --
+        // any valid one works equally well for a public index quote, so
+        // there is no real "whose credential" question here.
         InstrumentCatalog sharedCatalog = liveData
-                ? InstrumentCatalog.loadFrom(new InstrumentMasterLoader())
+                ? InstrumentCatalog.loadFrom(new InstrumentMasterLoader(), sharedQuoteService(registry))
                 : null;
 
         // Built eagerly, all N accounts, before anything starts listening --
@@ -148,9 +160,14 @@ public class Main {
             monitorsByChatId.put(account.getTelegramChatId(), monitor);
         }
 
-        EndOfDaySchedule endOfDay = endOfDaySchedule(monitorsByAccountId);
+        DailyWallClockSchedule endOfDay = endOfDaySchedule(monitorsByAccountId);
         if (endOfDay != null) {
             endOfDay.start();
+        }
+
+        DailyWallClockSchedule morningRefresh = morningInstrumentRefreshSchedule(sharedCatalog);
+        if (morningRefresh != null) {
+            morningRefresh.start();
         }
 
         // One bot token, one poller; which account a command belongs to is
@@ -260,6 +277,19 @@ public class Main {
     }
 
     /**
+     * The one Analytics-Token-authenticated quote lookup {@link InstrumentCatalog}
+     * needs, to fetch NIFTY spot for the daily strike window. Built from the
+     * first registered account (alphabetically, per AccountRegistry#all) --
+     * arbitrary but harmless, since every account's Analytics Token can read
+     * the same public index quote equally well.
+     */
+    private static QuoteService sharedQuoteService(AccountRegistry registry) {
+        TraderAccount first = registry.all().iterator().next();
+        return new UpstoxQuoteService(
+                new UpstoxDataCredentials(first.getUpstoxAnalyticsToken(), first.isUpstoxSandbox()));
+    }
+
+    /**
      * One WebSocket subscription per trade, scoped to just that trade's
      * instrument, authenticated with this account's own Analytics Token.
      * Fine at the handful-of-open-trades scale this runs at; if open trades
@@ -297,7 +327,7 @@ public class Main {
      * would otherwise fire five and a half hours late, well after the
      * broker had already squared the position off itself.
      */
-    private static EndOfDaySchedule endOfDaySchedule(Map<String, TradeMonitor> monitorsByAccountId) {
+    private static DailyWallClockSchedule endOfDaySchedule(Map<String, TradeMonitor> monitorsByAccountId) {
 
         String configured = System.getenv("EOD_EXIT_TIME");
         if (configured == null || configured.isBlank()) {
@@ -309,8 +339,34 @@ public class Main {
         LocalTime cutoff = LocalTime.parse(configured.trim());
         ZoneId zone = ZoneId.of(System.getenv().getOrDefault("EOD_TIMEZONE", "Asia/Kolkata"));
 
-        return new EndOfDaySchedule(cutoff, zone,
+        return new DailyWallClockSchedule("end-of-day close", cutoff, zone,
                 () -> monitorsByAccountId.values().forEach(TradeMonitor::onEndOfDay));
+    }
+
+    /**
+     * Off unless {@code sharedCatalog} exists (i.e. MARKET_DATA=live) --
+     * there is nothing to refresh in simulated mode. Runs once each
+     * morning so the NIFTY strike window reflects that day's spot without
+     * needing a restart; the default time is ahead of NSE F&O's 09:15 IST
+     * open so the window is ready before the first /track of the day.
+     * <p>
+     * A refresh failure here is not fatal and not reported to any chat --
+     * unlike /refresh, nobody is waiting on this one synchronously. It
+     * logs, same as {@link InstrumentCatalog#refresh()} always does, and
+     * the previous window stays in force until it succeeds.
+     */
+    private static DailyWallClockSchedule morningInstrumentRefreshSchedule(InstrumentCatalog sharedCatalog) {
+
+        if (sharedCatalog == null) {
+            return null;
+        }
+
+        LocalTime cutoff = LocalTime.parse(
+                System.getenv().getOrDefault("INSTRUMENT_REFRESH_TIME", "08:45"));
+        ZoneId zone = ZoneId.of(System.getenv().getOrDefault("EOD_TIMEZONE", "Asia/Kolkata"));
+
+        return new DailyWallClockSchedule("morning instrument refresh", cutoff, zone,
+                () -> log.info("Morning instrument refresh: {}", sharedCatalog.refresh()));
     }
 
     /**

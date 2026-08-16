@@ -332,6 +332,33 @@ No new code beyond 3.5.3: once `/token` is routed by chat id, it is inherently p
 
 One production host and one static IP serve all 10 accounts — Upstox's rule is about where the order-placement HTTP call originates, not which account it's for. But each of the 10 traders must **individually** register that same IP against their own Upstox developer app (`PUT /user/ip`, using their own token). This is a one-time step per trader to do during onboarding, not a code change.
 
+**Status (August 2026): not started.** No static IP or VM has been registered yet — see Phase 4's note below. This step, and the Phase 4 items that depend on it, are deliberately deferred rather than worked on speculatively without the infrastructure to verify against.
+
+### Step 3.5.7 — NIFTY-only instrument scope + daily strike window
+
+**Not originally planned as part of Phase 3.5** — added once it became clear the general-purpose instrument master (80k+ NSE instruments, all equities/indices/F&O) was fetching and holding far more than this MVP's actual scope needs. Same cut as the rest of this project's direction: keep only what's needed right now, not what a general platform might eventually want.
+
+| Item | Detail |
+|---|---|
+| Refactor | `InstrumentMasterLoader` filters at parse time to `segment=NSE_FO`, `instrument_type` in `{CE,PE}` (drops futures), underlying `name="NIFTY"` (drops every other underlying, and equities/indices entirely) |
+| New fields | `Instrument` gains `strikePrice` and `expiry` (option-only; 0/null elsewhere). `expiry`/`strike_price` field names are **unverified against a live Upstox payload** (outbound access to upstox.com is blocked in this sandbox) — flagged in code per CODING_STANDARDS.md §11; if wrong, the parser keeps zero contracts rather than wrong ones, which is loud (an empty catalog) not silent |
+| Refresh cadence | Daily instead of weekly (`InstrumentMasterLoader`'s cache is now stamped by calendar day, not the most-recent-Wednesday anchor). Affordable now that the retained dataset is tiny; removes the old "contract listed since last refresh doesn't resolve" staleness |
+| New class | `StrikeWindow` — pure computation, no I/O: nearest expiry on/after today, then 15 rungs each side of the strike nearest spot (`InstrumentCatalog.RUNGS_EACH_SIDE`), clamped at the edges of the actually-listed chain |
+| Refactor | `InstrumentCatalog.loadFrom`/`refresh` now take a `QuoteService`, fetch NIFTY spot (`NSE_INDEX|Nifty 50`), and narrow the raw chain through `StrikeWindow` before exposing it — callers never see the wider chain. Spot unavailable or no upcoming expiry → empty registry on initial load, previous registry kept on refresh (same "stale beats none" pattern as the rest of this class) |
+| New schedule | `DailyWallClockSchedule` (renamed from `EndOfDaySchedule`, which was already fully generic internally — reused rather than duplicated) drives a morning refresh, `INSTRUMENT_REFRESH_TIME` (default 08:45 IST), ahead of NSE F&O's 09:15 open |
+| Shared credential | The one spot-price lookup uses the first registered account's Analytics Token — arbitrary but harmless, since any valid one reads the same public index quote |
+
+**Tests:** `InstrumentMasterLoaderTest` rewritten for daily cache-file naming + parse-level NIFTY/CE-PE/futures/equity filtering. New `StrikeWindowTest` (nearest-expiry and strike-selection, including edge clamping). `InstrumentCatalogTest` rewritten for spot-driven windowing, including both refresh-failure modes (download fails vs. spot unavailable). `InstrumentRegistry` gained `all()` with a test. `DailyWallClockScheduleTest` renamed, mechanically unchanged.
+
+**Acceptance criteria:**
+
+- [x] `/track` resolves NIFTY 50 options within today's window; everything else (other underlyings, futures, equities, out-of-window strikes) resolves as `unknown instrument` — no separate rejection path needed, since it's simply not in the catalog
+- [x] Instrument master parse keeps only NIFTY CE/PE records — verified by `InstrumentMasterLoaderTest`'s filtering tests
+- [x] Strike window is 15 rungs each side of ATM, clamped at chain edges — verified by `StrikeWindowTest`
+- [x] A failed spot lookup or download on refresh keeps the previous window rather than clearing it
+- [ ] Field names (`strike_price`, `expiry`) verified against a real Upstox payload — blocked on the same static-IP/network-access gap as Phase 4; revisit together
+- [ ] Known gap, not yet closed: broker-fill adoption (`WATCH_BROKER_FILLS`/`/adopt`) bypasses the instrument catalog entirely (it builds a trade from the fill event directly), so a detected non-NIFTY position can still be adopted even though `/track`ing it manually would fail — see PRODUCT_REQUIREMENTS.md F9
+
 ### Acceptance criteria (Phase 3.5 complete when all are true)
 
 - [x] 2+ accounts configured with distinct chat ids and credentials, running trades simultaneously — mechanically true given per-account `TradeMonitor` construction; not yet exercised end-to-end against real Telegram/Upstox (same network-untestable caveat as the rest of `live`/`notification`)
@@ -340,11 +367,14 @@ One production host and one static IP serve all 10 accounts — Upstox's rule is
 - [ ] Corrupt-file isolation between accounts' persistence has a dedicated test (see step 3.5.4)
 - [x] ~~A malformed or failing account... does not prevent other accounts from running~~ — superseded: the deliberate policy is now fail-fast for the whole process on any misconfigured account (see step 3.5.2+3.5.3's "Startup failure policy" row)
 - [x] Adding an 11th account is a config-only change — no code, no redeploy of logic
-- [x] All existing single-account tests still pass — 423/423 (396 pre-3.5 + 21 from 3.5.1 + 6 from 3.5.2/3.5.3)
+- [x] All existing single-account tests still pass — 444/444 (396 pre-3.5 + 21 from 3.5.1 + 6 from 3.5.2/3.5.3 + 21 from 3.5.7)
+- [x] Instrument scope narrowed to NIFTY 50 options only, daily-refreshed strike window (step 3.5.7)
 
 ---
 
 ## Phase 4: Production hardening
+
+**Status (August 2026): the real-order-verification work is blocked.** No static IP or VM has been registered yet, so nothing that requires placing a real order or connecting from a fixed address (Upstox's `PUT /user/ip`, the first supervised `PLACE_REAL_ORDERS` trade) can be attempted or verified right now — see step 3.5.6. That is not a reason to stall the rest of this phase: step 4.0 (the `kb-test` merge) and step 4.1 (external configuration) have no static-IP dependency and can proceed independently. Revisit the blocked items once the infrastructure exists rather than working on them speculatively without anything to verify against.
 
 ### Step 4.0 — Merge kb-test into this repo (history-preserving)
 

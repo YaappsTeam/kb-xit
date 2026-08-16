@@ -12,12 +12,17 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Fires once a day, at a wall-clock time, to close out intraday positions
- * before the broker squares them off at whatever price it likes.
+ * Fires once a day, at a wall-clock time. Two independent uses share this
+ * class rather than duplicate its mechanics: closing out intraday
+ * positions before the broker squares them off (see {@code Main}'s
+ * end-of-day wiring), and refreshing the NIFTY instrument/strike window
+ * each morning before the market opens (see {@code InstrumentCatalog}).
  * <p>
- * Driven by its own clock rather than by price ticks. A tick-driven check
- * would not fire when the feed is dead or the instrument is quiet -- which
- * is precisely when an unattended position most needs closing.
+ * Driven by its own clock rather than by price ticks or command traffic.
+ * A tick-driven EOD check would not fire when the feed is dead or the
+ * instrument is quiet -- precisely when an unattended position most needs
+ * closing; a command-driven morning refresh would not fire on a day
+ * nobody happens to send a command before market open.
  * <p>
  * Polls rather than scheduling a single long delay: a delay computed hours
  * ahead is wrong if the machine sleeps or the clock is corrected, and the
@@ -25,13 +30,14 @@ import java.util.concurrent.TimeUnit;
  * time every half minute costs nothing and cannot drift.
  * <p>
  * The zone is explicit because the market's day is not the server's: a VM
- * on UTC would otherwise square off five and a half hours late.
+ * on UTC would otherwise fire five and a half hours late.
  */
 @Slf4j
-public final class EndOfDaySchedule {
+public final class DailyWallClockSchedule {
 
     private static final long CHECK_INTERVAL_SECONDS = 30;
 
+    private final String label;
     private final LocalTime cutoff;
     private final ZoneId zone;
     private final Runnable onCutoff;
@@ -39,7 +45,18 @@ public final class EndOfDaySchedule {
     private ScheduledExecutorService executor;
     private volatile LocalDate lastFired;
 
-    public EndOfDaySchedule(LocalTime cutoff, ZoneId zone, Runnable onCutoff) {
+    /**
+     * @param label     what this firing does, used only in logs and the
+     *                  poller thread's name (e.g. "end-of-day close",
+     *                  "morning instrument refresh") -- purely descriptive,
+     *                  does not affect scheduling
+     * @param cutoff    the wall-clock time to fire at
+     * @param zone      the zone {@code cutoff} is interpreted in
+     * @param onCutoff  run once, the first time {@code cutoff} is reached
+     *                  on a day it hasn't already fired
+     */
+    public DailyWallClockSchedule(String label, LocalTime cutoff, ZoneId zone, Runnable onCutoff) {
+        this.label = Objects.requireNonNull(label, "label must not be null");
         this.cutoff = Objects.requireNonNull(cutoff, "cutoff must not be null");
         this.zone = Objects.requireNonNull(zone, "zone must not be null");
         this.onCutoff = Objects.requireNonNull(onCutoff, "onCutoff must not be null");
@@ -47,19 +64,20 @@ public final class EndOfDaySchedule {
 
     public void start() {
         // Starting mid-session must not immediately fire for a cutoff that
-        // has already passed today -- that would close positions the user
-        // deliberately reopened after it.
+        // has already passed today -- that would re-run today's firing a
+        // second time (or, for the EOD case, close positions the user
+        // deliberately reopened after the cutoff).
         lastFired = LocalDate.now(zone);
 
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "end-of-day-schedule");
+            Thread t = new Thread(r, "daily-schedule-" + label.replace(' ', '-'));
             t.setDaemon(true);
             return t;
         });
         executor.scheduleAtFixedRate(this::checkOnce, CHECK_INTERVAL_SECONDS, CHECK_INTERVAL_SECONDS,
                 TimeUnit.SECONDS);
 
-        log.info("End-of-day close scheduled for {} {}", cutoff, zone);
+        log.info("{} scheduled for {} {}", label, cutoff, zone);
     }
 
     public void stop() {
@@ -73,13 +91,13 @@ public final class EndOfDaySchedule {
             ZonedDateTime now = ZonedDateTime.now(zone);
             if (shouldFire(now.toLocalDate(), now.toLocalTime())) {
                 lastFired = now.toLocalDate();
-                log.info("End-of-day cutoff {} reached", cutoff);
+                log.info("{} cutoff {} reached", label, cutoff);
                 onCutoff.run();
             }
         } catch (Exception e) {
             // A scheduled task that throws is silently cancelled, which
-            // would disable the cutoff for the rest of the process's life.
-            log.error("End-of-day check failed", e);
+            // would disable this schedule for the rest of the process's life.
+            log.error("{} check failed", label, e);
         }
     }
 

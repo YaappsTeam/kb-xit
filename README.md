@@ -140,30 +140,37 @@ Ticks only arrive while the market is open, so outside market hours the engine s
 
 **If a price feed drops, that account is told.** Without prices the stop-loss stops being enforced, and nothing else would make that visible — the bot looks healthy while the position is unprotected. The alert names the stop that is no longer being applied; reconnection is automatic and recovery is announced too. Each feed is closed when its trade closes or is released, so a session's trades don't leave a connection open apiece.
 
-## Symbols, prices and lot sizing (live mode)
+## Instrument scope: NIFTY 50 options only
 
-Typing `NSE_FO|45148` while scalping is not realistic, so in live mode `/track` takes a **trading symbol** and fills in the rest:
+**Right now, in live mode, `/track` only resolves NIFTY 50 index options** — not equities, not futures, not any other index. This is a deliberate MVP scope cut (August 2026), not a permanent limit: keeping the full NSE instrument master (equities, every index, every F&O underlying — 80k+ records) in memory when nothing downstream trades most of it just costs parse time and heap for no benefit. See PRODUCT_REQUIREMENTS.md section F9 for the full reasoning.
+
+Within that scope, only what's actually relevant **today** is kept: the nearest expiry, and the **15 strikes above and 15 below** the one closest to that morning's NIFTY spot (up to 31 strikes × CE/PE = up to 62 instruments). A symbol outside that window — wrong underlying, a strike too far from spot, a later expiry — resolves the same way an unknown symbol always has:
+
+```
+unknown instrument: X
+```
+
+There's no separate "known but out of scope" message; the instrument simply isn't in that day's catalog.
 
 ```
 /track nifty25000ce18aug26        price = LTP, quantity = capital ÷ lot cost
-/track ACC 25                     quantity 25, price = LTP
-/track ACC 1850.5 25              both explicit
-/track NSE_EQ|INE012A01025 …      raw instrument key still works
+/track nifty25000ce18aug26 20      quantity 20, price = LTP
+/track nifty25000ce18aug26 55.3 20 both explicit
+/track NSE_FO|45148 …               raw instrument key still works, if it's in today's window
 ```
 
-Matching ignores case and spaces, so `NIFTY 25000 CE 18 AUG 26` and `nifty25000ce18aug26` are the same instrument, and `NIFTY50` finds the index. Symbols are looked up in a local copy of Upstox's instrument master (~2 MB, ~43k instruments, cached in `~/.xit-mc/instruments`) — a map lookup, not an API call, so it costs nothing in the hot path. With exactly one trailing number it is read as a **quantity**, never a price.
+Matching ignores case and spaces, so `NIFTY 25000 CE 18 AUG 26` and `nifty25000ce18aug26` are the same instrument. With exactly one trailing number it is read as a **quantity**, never a price.
 
-**Quantity is sized in whole lots**, which matters for F&O where quantity must be a multiple of the contract lot:
+**Quantity is sized in whole lots**, since F&O quantity must be a multiple of the contract lot (65 for NIFTY):
 
 ```
-lots = floor(CAPITAL_PER_TRADE / (ltp × lotSize))     capped at floor(freezeQty / lotSize)
+lots = floor(capitalPerTrade / (ltp × lotSize))     capped at floor(freezeQty / lotSize)
 ```
 
-Equities have `lotSize = 1`, so the same formula gives plain capital ÷ price. Worked examples at `CAPITAL_PER_TRADE=50000`:
+`capitalPerTrade` is that account's own setting from `accounts.properties`. Worked example at `capitalPerTrade=50000`:
 
 | Command | LTP | Lot | Result |
 |---|---|---|---|
-| `ACC` | 1,362.80 | 1 | 36 → ₹49,061 |
 | `nifty25000ce18aug26` | 55.30 | 65 | 13 lots = 845 → ₹46,729 |
 | `nifty25000pe18aug26` | 431.45 | 65 | 1 lot = 65 → ₹28,044 |
 
@@ -172,23 +179,19 @@ Two deliberate behaviours:
 - **Capped, not sliced.** Exchanges reject single orders above a freeze quantity (1,755 for NIFTY, i.e. 27 lots). When your capital would buy more — routine on expiry days — the order is capped at that limit rather than split into several. Slicing is a planned enhancement; multiple fills at different prices don't fit the engine's single-entry-price model yet.
 - **Refused, not zero-sized.** If capital won't cover even one lot, `/track` reports why instead of opening a zero-quantity trade.
 
-Indices are streamable but **cannot be bought** — `/track NIFTY50` is refused, since a position exists only in the corresponding option or future.
-
-A handful of trading symbols are ambiguous (`CHOLAFIN`, `MOTHERSON`, `ELECTCAST`, `IMC1`, `SILVER`). Rather than guess, `/track` lists the candidates and asks for the full instrument key.
-
-In simulated mode there is no instrument master and no price source, so `/track` still requires `<instrumentKey> <price> <qty>` in full.
+In simulated mode there is no instrument catalog and no price source, so `/track` still requires `<instrumentKey> <price> <qty>` in full.
 
 ### Instrument master refresh
 
-The master refreshes **weekly, on Wednesdays** — the cache is stamped with the most recent Wednesday, so the first run on or after one downloads and every run until the next reads from disk. That keeps the ~2 MB download and 37 MB parse off the VM on the other six days.
+The underlying instrument master refreshes **daily** — the cache is stamped with today's date, so the first run of the day downloads and every later one that day reads from disk. Cheap enough to do daily now that only NIFTY options are kept, unlike the old weekly-Wednesday schedule this replaced.
 
-The trade-off: between refreshes, contracts listed since Wednesday won't resolve, and expired ones linger. When you need one immediately:
+**The strike window itself refreshes once each morning**, `INSTRUMENT_REFRESH_TIME` (default `08:45`, same zone as `EOD_TIMEZONE`), ahead of NSE F&O's 09:15 open — not continuously re-centered through the session. When you need it sooner:
 
 ```
 /refresh
 ```
 
-That forces a download regardless of schedule and takes effect on the next command. If it fails, the previous master stays loaded — stale beats none mid-session.
+That forces a fresh download and recomputes the window against current spot immediately. If either the download or the spot-price lookup fails, the previous window stays in force — stale beats none mid-session.
 
 ## Costs and breakeven
 
