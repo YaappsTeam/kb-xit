@@ -54,8 +54,13 @@
        converts ported candles to the same price-path shape
        StochasticPricePathGenerator produces, HistoricalPricePathSource
        fetches and scopes them to today's tracked NIFTY-options window
-       the same way TradeMonitor scopes live fills. -->
-  <version>0.29.0-SNAPSHOT</version>
+       the same way TradeMonitor scopes live fills, 0.30.0 structured
+       JSON logging (logback.xml) with accountId/orderId in MDC (story
+       #23): one central wrap in TelegramCommandHandler for every
+       Telegram-triggered log line, TradeMonitor sets its own context
+       for the two feed-triggered entry points (detected fills, price
+       updates). -->
+  <version>0.30.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

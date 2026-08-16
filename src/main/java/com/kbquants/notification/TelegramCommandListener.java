@@ -105,4 +105,12 @@ public interface TelegramCommandListener {
      * is not there.
      */
     void onReconcileRequested();
+
+    /**
+     * This listener's own account id, for log correlation (see
+     * CODING_STANDARDS.md). {@link TelegramCommandHandler} puts it in MDC
+     * around dispatch, so every log line a command produces is filterable
+     * by account without each of the methods above setting it themselves.
+     */
+    String accountId();
 }

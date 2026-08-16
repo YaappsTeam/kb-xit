@@ -253,7 +253,7 @@ public class Main {
         // sharedCatalog is null and there is nothing to check against.
         return new TradeMonitor(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder,
                 chargesService, riskSettings, tradeStore, exitOrderPlacer, tradingToken, watchBrokerFills,
-                positionQuery, Optional.ofNullable(sharedCatalog));
+                positionQuery, Optional.ofNullable(sharedCatalog), account.getAccountId());
     }
 
     /**

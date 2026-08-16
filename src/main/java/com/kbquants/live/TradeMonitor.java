@@ -36,6 +36,7 @@ import com.kbquants.session.PositionQuery;
 import com.kbquants.session.PositionQueryException;
 import com.kbquants.session.PositionReconciliation;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -175,6 +176,15 @@ public class TradeMonitor implements TelegramCommandListener {
 
     private static final int MAX_REMEMBERED_ORDER_IDS = 5_000;
 
+    /**
+     * For log correlation only (MDC, see CODING_STANDARDS.md and {@link
+     * #accountId()}) -- nothing in this class branches on it. Defaults to
+     * "unknown" for the many constructor overloads below that predate
+     * multi-account support and don't supply one; every real deployment
+     * path (see {@code Main#buildTradeMonitor}) does.
+     */
+    private final String accountId;
+
     public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
                         Notifier notifier, TrackRequestResolver trackRequestResolver) {
         this(orderFillFeed, feedFactory, notifier, trackRequestResolver, MilestoneLadder.defaultLadder(),
@@ -266,6 +276,22 @@ public class TradeMonitor implements TelegramCommandListener {
                          ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken,
                          boolean requireExplicitAdoption, PositionQuery positionQuery,
                          Optional<InstrumentCatalog> instrumentCatalog) {
+        this(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder, chargesService,
+                riskSettings, tradeStore, exitOrderPlacer, tradingToken, requireExplicitAdoption, positionQuery,
+                instrumentCatalog, "unknown");
+    }
+
+    /**
+     * @param accountId  this account's id, for log correlation only -- see
+     *                   the field Javadoc
+     */
+    public TradeMonitor(OrderFillFeed orderFillFeed, Function<TradeFillEvent, MarketDataFeed> feedFactory,
+                         Notifier notifier, TrackRequestResolver trackRequestResolver, ActiveLadder activeLadder,
+                         ChargesService chargesService, RiskSettings riskSettings, TradeStore tradeStore,
+                         ExitOrderPlacer exitOrderPlacer, TradingToken tradingToken,
+                         boolean requireExplicitAdoption, PositionQuery positionQuery,
+                         Optional<InstrumentCatalog> instrumentCatalog, String accountId) {
+        this.accountId = Objects.requireNonNull(accountId, "accountId must not be null");
         this.instrumentCatalog = Objects.requireNonNull(instrumentCatalog, "instrumentCatalog must not be null");
         this.positionQuery = Objects.requireNonNull(positionQuery, "positionQuery must not be null");
         this.requireExplicitAdoption = requireExplicitAdoption;
@@ -280,7 +306,30 @@ public class TradeMonitor implements TelegramCommandListener {
         this.activeLadder = Objects.requireNonNull(activeLadder, "activeLadder must not be null");
         this.orderFillFeed = Objects.requireNonNull(orderFillFeed, "orderFillFeed must not be null");
         restore();
-        orderFillFeed.start(this::onDetectedFill);
+        orderFillFeed.start(this::onDetectedFillWithLogContext);
+    }
+
+    @Override
+    public String accountId() {
+        return accountId;
+    }
+
+    /**
+     * {@link #onDetectedFill} entered from the broker's own fill stream,
+     * not a Telegram command -- so unlike every {@link TelegramCommandListener}
+     * method (MDC set once centrally by {@code TelegramCommandHandler}'s
+     * dispatch), this path has to set its own account/trade context for
+     * the log lines it produces.
+     */
+    private void onDetectedFillWithLogContext(TradeFillEvent fill) {
+        MDC.put("accountId", accountId);
+        MDC.put("orderId", fill.getOrderId());
+        try {
+            onDetectedFill(fill);
+        } finally {
+            MDC.remove("orderId");
+            MDC.remove("accountId");
+        }
     }
 
     /**
@@ -587,8 +636,23 @@ public class TradeMonitor implements TelegramCommandListener {
         MarketDataFeed feed = feedFactory.apply(trade.fill);
         trade.feed = feed;
 
-        feed.setFailureListener(reason -> reportFeedFailure(trade, reason));
-        feed.start((price, timestamp) -> onPrice(trade, price));
+        // Both callbacks fire from the feed's own thread, not through
+        // Telegram dispatch, so unlike TelegramCommandListener methods
+        // (MDC set once centrally) each has to set its own account/trade
+        // context here.
+        feed.setFailureListener(reason -> withTradeLogContext(trade, () -> reportFeedFailure(trade, reason)));
+        feed.start((price, timestamp) -> withTradeLogContext(trade, () -> onPrice(trade, price)));
+    }
+
+    private void withTradeLogContext(ActiveTrade trade, Runnable action) {
+        MDC.put("accountId", accountId);
+        MDC.put("orderId", trade.fill.getOrderId());
+        try {
+            action.run();
+        } finally {
+            MDC.remove("orderId");
+            MDC.remove("accountId");
+        }
     }
 
     /**
@@ -1006,7 +1070,7 @@ public class TradeMonitor implements TelegramCommandListener {
         // Offered afterwards, and one message each, so the summary stays
         // readable and each offer carries its own pair of buttons.
         for (BrokerPosition position : report.getUntracked()) {
-            onDetectedFill(toFill(position));
+            onDetectedFillWithLogContext(toFill(position));
         }
     }
 
