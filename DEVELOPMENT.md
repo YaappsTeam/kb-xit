@@ -26,8 +26,8 @@ com.kbquants
 ├── instrument     ✅  Instrument master (download, weekly cache, symbol resolution) + lot- and
 │                      risk-aware position sizing + /track resolution
 ├── live           ✅  Upstox implementations (market data, quotes, charges, auth) + TradeMonitor
-├── marketdata     ⏸  Historical-candle retrieval (ported from kb-test, story #20); unwired
-│                      until story #24 picks it up — see CODING_STANDARDS.md §2
+├── marketdata     ✅  Historical-candle retrieval (ported from kb-test, story #20) + a
+│                      price-path bridge for backtesting (story #24) — see CODING_STANDARDS.md §2
 ├── notification   ✅  Telegram bot: outbound alerts incl. inline keyboards + inbound commands
 ├── session        ✅  Broker-agnostic interfaces (MarketDataFeed, OrderFillFeed, QuoteService,
 │                      ChargesService, BuyRequestResolver) + simulated/paper implementations

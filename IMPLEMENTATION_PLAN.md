@@ -425,16 +425,16 @@ Auto-transition to PHASE_4 at configurable EOD time (e.g., 15:15 IST). Force exi
 - Health checks (WebSocket state, last tick recency, token validity)
 - Graceful shutdown (close feeds, log final trade states)
 
-### Step 4.4 — Historical data feed
+### Step 4.4 — Historical data feed — DONE
 
-`HistoricalDataFeed implements MarketDataFeed` using broker's historical candle API for backtesting against real data.
+Landed via story #24. **Differently than originally planned here** — see `REPO_STRATEGY.md`-style reasoning captured directly in story #24's issue body: this step's original wording (`HistoricalDataFeed implements MarketDataFeed`) assumed the live push-based interface; the actual backtest entry point (`simulation.runner.SequentialCombinationExecutor.execute(List<Double>, SimulationRequest)`) is pull-based and doesn't touch `MarketDataFeed` at all. What shipped instead: `marketdata.pricepath.CandleToPricePath` (candles → closing-price list) and `marketdata.pricepath.HistoricalPricePathSource` (fetches via `HistoricalCandleFeed`, scoped to NIFTY options via `InstrumentCatalog`, same split as `TradeMonitor.isOutOfScope`). The historical path is a sibling `List<Double>` source next to `StochasticPricePathGenerator`'s output — no changes needed to `PricePathGenerator`, `ScenarioConfig`, or the executor.
 
 ### Acceptance criteria (Phase 4)
 
 - [ ] All thresholds configurable without code changes
 - [ ] Trades auto-close at EOD
 - [ ] Health status queryable; logs carry trade correlation IDs
-- [ ] Historical backtesting works against real past data
+- [x] Historical backtesting works against real past data (story #24)
 
 ---
 
