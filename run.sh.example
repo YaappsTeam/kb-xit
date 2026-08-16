@@ -1,38 +1,30 @@
 #!/bin/bash
 # Copy this file to run.sh (already gitignored) and fill in your real
-# credentials there. Never commit run.sh -- it will contain your live
+# values there. Never commit run.sh -- it will contain your live
 # Telegram bot token. See CODING_STANDARDS.md section 7 for why
 # credentials are always read from the environment, never baked into
 # the build.
+#
+# Per-trader settings (Telegram chat id, Upstox credentials, capital and
+# risk) are NOT here -- they live in accounts.properties (copy it from
+# accounts.properties.example). This file holds only the settings that
+# apply to the whole deployment, shared across every registered account.
 
 set -euo pipefail
 
 export TELEGRAM_BOT_TOKEN="your-telegram-bot-token-here"
-export TELEGRAM_CHAT_ID="your-telegram-chat-id-here"
 # export TRADING_MODE="paper"   # optional -- "paper" is already the default
 
-# Market data source: "simulated" (default) random-walks from your entry
-# price; "live" streams real ticks from Upstox. Live data needs an Upstox
-# Analytics Token -- generate one from the Developer Apps page (Analytics
-# tab). It is valid for a year, is read-only, and cannot place orders, so
-# no daily login is involved. Uncomment both lines to use live prices.
+# Path to the account registry. Optional -- defaults to
+# accounts.properties in the working directory, which matches where
+# `mvn package` / `run.sh` normally runs from.
+# export ACCOUNTS_FILE="accounts.properties"
+
+# Market data source: "simulated" (default) random-walks from each
+# account's entry price; "live" streams real ticks from Upstox, one
+# WebSocket per account using that account's own Analytics Token from
+# accounts.properties. Uncomment to use live prices.
 # export MARKET_DATA="live"
-# export UPSTOX_ANALYTICS_TOKEN="your-upstox-analytics-token-here"
-
-# Rupees to deploy per trade, used to size a bare "/track <symbol>" when you
-# don't pass a quantity. Required whenever MARKET_DATA=live. Sizing is in
-# whole lots and is capped at the exchange freeze limit (27 lots for NIFTY)
-# rather than being split across several orders.
-# export CAPITAL_PER_TRADE="50000"
-
-# Rupees you are willing to lose if the hard stop is hit. Optional but
-# strongly recommended: without it, position size is capped by capital
-# alone, so a stopped-out OPTIONS trade loses CAPITAL_PER_TRADE x 40%
-# (Rs 20,000 on Rs 50,000). With it, the position is sized so the stop
-# costs this much instead -- a wide stop on a smaller position, rather
-# than a narrow stop that ordinary noise would trip. Adjustable at
-# runtime with /risk <amount> or /risk off.
-# export MAX_RISK_PER_TRADE="5000"
 
 # Newest by modification time, not first alphabetically: after a version
 # bump target/ can hold jars from several versions (plus the shade
@@ -45,20 +37,26 @@ export TELEGRAM_CHAT_ID="your-telegram-chat-id-here"
 # export EOD_EXIT_TIME="15:15"
 # export EOD_TIMEZONE="Asia/Kolkata"
 
-# DANGER: when true, exits place REAL SELL orders with your broker.
-# Off by default and never implied by any other setting. Also needs a
-# /token each day and a registered static IP -- Upstox refuses orders
-# from anywhere else, however valid the token is.
+# DANGER: when true, exits place REAL SELL orders with EVERY account's
+# broker. Off by default and never implied by any other setting. Also
+# needs each account's own daily /token and a registered static IP --
+# Upstox refuses orders from anywhere else, however valid the token is.
 # export PLACE_REAL_ORDERS="true"
 # export ORDER_PRODUCT="I"   # I = intraday, D = delivery
 
-# Watch your broker's order stream, so a buy punched into the Upstox app
-# turns up here without being typed in again. Detected positions are
-# offered, never taken: the stream carries the whole account, including
-# hedges and other strategies, and managing those uninvited would apply
-# exit rules never meant for them. Accept with the button or /adopt.
-# Needs a /token before the stream can start.
+# Watch every account's broker order stream, so a buy punched into the
+# Upstox app turns up in that account's chat without being typed in
+# again. Detected positions are offered, never taken: the stream carries
+# the whole account, including hedges and other strategies, and managing
+# those uninvited would apply exit rules never meant for them. Accept
+# with the button or /adopt. Needs that account's /token before its
+# stream can start.
 # export WATCH_BROKER_FILLS="true"
+
+# Directory where each account's open trades are persisted, one file
+# named <accountId>.json per account. Optional -- defaults to
+# ~/.xit-mc/open-trades/.
+# export TRADE_STATE_DIR="/path/to/state/dir"
 
 JAR=$(find target -maxdepth 1 -name 'xit-mc-*.jar' ! -name 'original-*' -printf '%T@ %p\n' \
   | sort -rn | head -n 1 | cut -d' ' -f2-)

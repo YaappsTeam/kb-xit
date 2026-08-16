@@ -4,9 +4,13 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -596,5 +600,55 @@ class TelegramCommandHandlerTest {
         TelegramCommandHandler.dispatch("  /track   NSE_EQ|INE848E01016   1500   10  ", listener);
 
         assertEquals(List.of("track:NSE_EQ|INE848E01016|1500|10"), listener.events);
+    }
+
+    // ---- chat-id routing (Phase 3.5.3) ----
+
+    @Test
+    void chatIdOfShouldReadTheChatIdFromAMessage() {
+
+        TelegramCommandHandler.TelegramMessage message = new TelegramCommandHandler.TelegramMessage();
+        message.chat = new TelegramCommandHandler.TelegramChat();
+        message.chat.id = 111222333L;
+
+        assertEquals("111222333", TelegramCommandHandler.chatIdOf(message));
+    }
+
+    @Test
+    void chatIdOfShouldReturnNullWhenChatIsMissing() {
+
+        TelegramCommandHandler.TelegramMessage message = new TelegramCommandHandler.TelegramMessage();
+        message.chat = null;
+
+        assertNull(TelegramCommandHandler.chatIdOf(message));
+    }
+
+    @Test
+    void constructorShouldRejectBlankBotToken() {
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new TelegramCommandHandler("  ", chatId -> Optional.empty()));
+    }
+
+    @Test
+    void constructorShouldRejectNullBotToken() {
+
+        assertThrows(NullPointerException.class,
+                () -> new TelegramCommandHandler(null, chatId -> Optional.empty()));
+    }
+
+    @Test
+    void constructorShouldRejectNullListenerResolver() {
+
+        assertThrows(NullPointerException.class,
+                () -> new TelegramCommandHandler("token", null));
+    }
+
+    @Test
+    void constructorShouldAcceptAValidBotTokenAndResolver() {
+
+        TelegramCommandHandler handler = new TelegramCommandHandler("token", chatId -> Optional.empty());
+
+        assertNotNull(handler);
     }
 }

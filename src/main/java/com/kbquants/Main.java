@@ -1,44 +1,52 @@
 package com.kbquants;
 
+import com.kbquants.domain.ActiveLadder;
+import com.kbquants.domain.MilestoneLadder;
+import com.kbquants.domain.MilestoneSets;
+import com.kbquants.domain.RiskSettings;
+import com.kbquants.domain.TraderAccount;
+import com.kbquants.domain.TradingToken;
 import com.kbquants.instrument.InstrumentAwareTrackRequestResolver;
 import com.kbquants.instrument.InstrumentCatalog;
 import com.kbquants.instrument.InstrumentMasterLoader;
 import com.kbquants.instrument.PositionSizer;
 import com.kbquants.live.EndOfDaySchedule;
 import com.kbquants.live.TradeMonitor;
-import com.kbquants.live.UpstoxDataCredentials;
-import com.kbquants.live.UpstoxMarketDataFeed;
-import com.kbquants.domain.ActiveLadder;
-import com.kbquants.domain.MilestoneLadder;
-import com.kbquants.domain.RiskSettings;
-import com.kbquants.domain.TradingToken;
 import com.kbquants.live.UpstoxChargesService;
+import com.kbquants.live.UpstoxDataCredentials;
 import com.kbquants.live.UpstoxExitOrderPlacer;
+import com.kbquants.live.UpstoxMarketDataFeed;
 import com.kbquants.live.UpstoxOrderFillFeed;
 import com.kbquants.live.UpstoxPositionQuery;
-import com.kbquants.session.PositionQuery;
 import com.kbquants.live.UpstoxQuoteService;
+import com.kbquants.notification.TelegramCommandHandler;
+import com.kbquants.notification.TelegramCredentials;
+import com.kbquants.notification.TelegramNotifier;
+import com.kbquants.session.AccountRegistry;
 import com.kbquants.session.ChargesService;
 import com.kbquants.session.EstimatedChargesService;
 import com.kbquants.session.ExitOrderPlacer;
 import com.kbquants.session.JsonTradeStore;
-import com.kbquants.session.PaperExitOrderPlacer;
-import com.kbquants.session.TradeStore;
-import com.kbquants.notification.TelegramCommandHandler;
-import com.kbquants.notification.TelegramCredentials;
-import com.kbquants.notification.TelegramNotifier;
-import com.kbquants.session.TrackRequestResolver;
 import com.kbquants.session.LiteralTrackRequestResolver;
 import com.kbquants.session.MarketDataFeed;
 import com.kbquants.session.NoOpOrderFillFeed;
 import com.kbquants.session.OrderFillFeed;
+import com.kbquants.session.PaperExitOrderPlacer;
+import com.kbquants.session.PositionQuery;
 import com.kbquants.session.SimulatedMarketDataFeed;
 import com.kbquants.session.TradeFillEvent;
+import com.kbquants.session.TradeStore;
+import com.kbquants.session.TrackRequestResolver;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -48,15 +56,25 @@ import java.util.function.Function;
  * ExitEngine + unified milestone ladder via TradeMonitor. No real broker
  * order is ever placed -- see PRODUCT_REQUIREMENTS.md F7.
  * <p>
- * Two switches, deliberately kept orthogonal:
+ * One process manages every account in {@link AccountRegistry}: each gets
+ * its own {@link TradeMonitor}, its own Upstox credentials, its own
+ * Telegram chat, its own trade-state file, and its own daily order token --
+ * see PRODUCT_REQUIREMENTS.md section F8 and IMPLEMENTATION_PLAN.md Phase
+ * 3.5. What IS shared across every account: the JVM process, the Telegram
+ * bot token (routing to the right account happens per-chat-id in
+ * {@link TelegramCommandHandler}), and the instrument master cache.
+ * <p>
+ * Two switches, deliberately kept orthogonal and process-wide (every
+ * account runs the same way, at least until a reason to split them
+ * per-account shows up):
  * <ul>
  *   <li>{@code TRADING_MODE} -- who executes the trade. Only "paper" is
  *       wired up; live order placement is Phase 3 (IMPLEMENTATION_PLAN.md)
  *       and is the half that needs the daily OAuth token and a static IP.</li>
  *   <li>{@code MARKET_DATA} -- where prices come from. "simulated" (default)
  *       random-walks from the entry price; "live" streams real ticks from
- *       Upstox over WebSocket, authenticated with the year-long, read-only
- *       Analytics Token.</li>
+ *       Upstox over WebSocket, each account authenticated with its own
+ *       year-long, read-only Analytics Token.</li>
  * </ul>
  * MARKET_DATA=live with TRADING_MODE=paper is the useful combination today:
  * the exit engine reacts to genuine market prices while nothing can place an
@@ -85,27 +103,100 @@ public class Main {
         }
         boolean liveData = "live".equalsIgnoreCase(marketData);
 
-        TelegramCredentials credentials = TelegramCredentials.fromEnv();
-        TelegramNotifier notifier = new TelegramNotifier(credentials);
+        String botToken = requireEnv("TELEGRAM_BOT_TOKEN");
 
-        // Everything below is resolved eagerly so a missing Analytics Token,
-        // an unreachable instrument master or a bad CAPITAL_PER_TRADE fails
-        // at startup rather than on the first /track, mid-trading-session.
+        AccountRegistry registry = AccountRegistry.load(accountsFilePath());
+        log.info("Loaded {} account(s) from the registry", registry.size());
+
+        // These flags apply to every account identically, so they are
+        // logged once here rather than once per account in
+        // buildTradeMonitor -- the same message N times would look like a
+        // per-account decision when it is a single process-wide one.
+        boolean watchBrokerFills = Boolean.parseBoolean(
+                System.getenv().getOrDefault("WATCH_BROKER_FILLS", "false"));
+        if (watchBrokerFills) {
+            log.info("WATCH_BROKER_FILLS is on — positions opened at any account's broker will be offered for "
+                    + "adoption in that account's chat. Nothing is managed until accepted. Needs a /token first.");
+        }
+
+        boolean placeRealOrders = Boolean.parseBoolean(
+                System.getenv().getOrDefault("PLACE_REAL_ORDERS", "false"));
+        if (placeRealOrders) {
+            log.warn("PLACE_REAL_ORDERS is ON — exits will place REAL SELL orders for every account. "
+                    + "Each needs its own /token daily and a registered static IP.");
+        } else {
+            log.info("PLACE_REAL_ORDERS is off — exits are recorded and reported, no broker order is placed.");
+        }
+
+        // One download, shared by every account -- the instrument master is
+        // public market data, not a per-account credential, so there is
+        // nothing to isolate here and no reason to fetch it N times.
+        InstrumentCatalog sharedCatalog = liveData
+                ? InstrumentCatalog.loadFrom(new InstrumentMasterLoader())
+                : null;
+
+        // Built eagerly, all N accounts, before anything starts listening --
+        // a bad credential or a missing field for account #7 must fail the
+        // whole process at startup, not surface as a silent gap once
+        // trading is already underway for accounts #1-6.
+        Map<String, TradeMonitor> monitorsByAccountId = new LinkedHashMap<>();
+        Map<String, TradeMonitor> monitorsByChatId = new LinkedHashMap<>();
+        for (TraderAccount account : registry.all()) {
+            TradeMonitor monitor = buildTradeMonitor(
+                    account, liveData, sharedCatalog, botToken, watchBrokerFills, placeRealOrders);
+            monitorsByAccountId.put(account.getAccountId(), monitor);
+            monitorsByChatId.put(account.getTelegramChatId(), monitor);
+        }
+
+        EndOfDaySchedule endOfDay = endOfDaySchedule(monitorsByAccountId);
+        if (endOfDay != null) {
+            endOfDay.start();
+        }
+
+        // One bot token, one poller; which account a command belongs to is
+        // resolved per-update from the sending chat id -- see
+        // TelegramCommandHandler.
+        TelegramCommandHandler commandHandler = new TelegramCommandHandler(botToken,
+                chatId -> Optional.ofNullable(monitorsByChatId.get(chatId)));
+        commandHandler.start();
+
+        log.info("xit-mc started in PAPER trading mode with {} market data, managing {} account(s): {}. "
+                        + "Send /track <symbol> to Telegram to begin.",
+                liveData ? "LIVE Upstox" : "simulated", monitorsByAccountId.size(), monitorsByAccountId.keySet());
+
+        Runtime.getRuntime().addShutdownHook(new Thread(commandHandler::stop));
+    }
+
+    /**
+     * Wires one account's full stack: notifier, feed, resolver, charges,
+     * persistence, order token, exit placer, fill feed, position query, and
+     * the TradeMonitor that ties them together. Nothing here is shared with
+     * any other account's stack -- see PRODUCT_REQUIREMENTS.md F8.
+     */
+    private static TradeMonitor buildTradeMonitor(TraderAccount account, boolean liveData,
+                                                    InstrumentCatalog sharedCatalog, String botToken,
+                                                    boolean watchBrokerFills, boolean placeRealOrders)
+            throws IOException {
+
+        TelegramNotifier notifier = new TelegramNotifier(
+                new TelegramCredentials(botToken, account.getTelegramChatId()));
+
+        MilestoneLadder defaultLadder = MilestoneSets.byName(account.getDefaultMilestoneSetName())
+                .orElseThrow(() -> new IllegalStateException(
+                        "account '" + account.getAccountId() + "' names unknown milestone set: "
+                                + account.getDefaultMilestoneSetName()));
+        ActiveLadder activeLadder = new ActiveLadder(defaultLadder);
+        RiskSettings riskSettings = new RiskSettings(account.getMaxRiskPerTrade());
+
         Function<TradeFillEvent, MarketDataFeed> feedFactory;
         TrackRequestResolver trackRequestResolver;
         ChargesService chargesService;
 
-        // Shared between the monitor and position sizing so that switching
-        // milestone sets moves the hard stop for both at once.
-        ActiveLadder activeLadder = new ActiveLadder(MilestoneLadder.defaultLadder());
-
-        // Seeded from the environment, then adjustable at runtime via /risk.
-        RiskSettings riskSettings = new RiskSettings(maxRiskFromEnv());
-
         if (liveData) {
-            UpstoxDataCredentials dataCredentials = UpstoxDataCredentials.fromEnv();
+            UpstoxDataCredentials dataCredentials =
+                    new UpstoxDataCredentials(account.getUpstoxAnalyticsToken(), account.isUpstoxSandbox());
             feedFactory = liveFeedFactory(dataCredentials);
-            trackRequestResolver = instrumentAwareResolver(dataCredentials, activeLadder, riskSettings);
+            trackRequestResolver = instrumentAwareResolver(account, dataCredentials, sharedCatalog, activeLadder, riskSettings);
             chargesService = new UpstoxChargesService(dataCredentials);
         } else {
             feedFactory = Main::simulatedFeed;
@@ -113,121 +204,100 @@ public class Main {
             chargesService = new EstimatedChargesService();
         }
 
-        // Open trades are written to disk and restored on the next start.
-        // The position does not disappear when the process does, so losing
-        // the entry, breakeven, phase and ratcheted stop would leave it
-        // open at the broker with nothing watching it.
-        TradeStore tradeStore = new JsonTradeStore();
+        // Open trades are written to disk and restored on the next start,
+        // one file per account so a restart cannot cross-restore one
+        // trader's positions under another's identity.
+        TradeStore tradeStore = new JsonTradeStore(tradeStateFilePath(account));
 
         // Supplied at runtime via /token, because the daily Upstox login is
-        // interactive and cannot be automated.
+        // interactive and cannot be automated -- each account supplies its
+        // own, in its own chat.
         TradingToken tradingToken = new TradingToken(ZoneId.of("Asia/Kolkata"));
 
-        // The only object in the system that can sell anything. Off unless
-        // PLACE_REAL_ORDERS is explicitly enabled -- the difference between
-        // this and the paper placer is real money, so it is never the
-        // default and never implied by another setting.
-        ExitOrderPlacer exitOrderPlacer = exitOrderPlacer(tradingToken);
+        ExitOrderPlacer exitOrderPlacer = exitOrderPlacer(tradingToken, placeRealOrders);
 
         // The broker's order stream carries fills for the whole account, so
         // it is only ever paired with explicit adoption -- the two are set
         // together here so neither can be enabled without the other.
-        boolean watchBrokerFills = Boolean.parseBoolean(
-                System.getenv().getOrDefault("WATCH_BROKER_FILLS", "false"));
-
+        // Process-wide switch: every account either watches its own fill
+        // feed or none does.
         OrderFillFeed orderFillFeed = watchBrokerFills
                 ? new UpstoxOrderFillFeed(tradingToken)
                 : new NoOpOrderFillFeed();
 
-        if (watchBrokerFills) {
-            log.info("WATCH_BROKER_FILLS is on — positions opened at your broker will be offered for adoption. "
-                    + "Nothing is managed until you accept it. Needs a /token before the stream can start.");
-        }
-
-        // Only ever asked once a /token arrives; without one it reports
-        // itself unavailable rather than answering "nothing is open",
-        // which would flag every managed trade as gone.
+        // Only ever asked once this account's /token arrives; without one
+        // it reports itself unavailable rather than answering "nothing is
+        // open", which would flag every managed trade as gone.
         PositionQuery positionQuery = new UpstoxPositionQuery(tradingToken);
 
-        TradeMonitor tradeMonitor = new TradeMonitor(orderFillFeed, feedFactory, notifier,
-                trackRequestResolver, activeLadder, chargesService, riskSettings, tradeStore, exitOrderPlacer,
-                tradingToken, watchBrokerFills, positionQuery);
+        return new TradeMonitor(orderFillFeed, feedFactory, notifier, trackRequestResolver, activeLadder,
+                chargesService, riskSettings, tradeStore, exitOrderPlacer, tradingToken, watchBrokerFills,
+                positionQuery);
+    }
 
-        EndOfDaySchedule endOfDay = endOfDaySchedule(tradeMonitor);
-        if (endOfDay != null) {
-            endOfDay.start();
-        }
+    /**
+     * {@code ACCOUNTS_FILE} overrides; otherwise {@code accounts.properties}
+     * in the working directory, matching {@code accounts.properties.example}.
+     */
+    private static Path accountsFilePath() {
+        String override = System.getenv("ACCOUNTS_FILE");
+        return (override == null || override.isBlank()) ? Paths.get("accounts.properties") : Paths.get(override);
+    }
 
-        TelegramCommandHandler commandHandler = new TelegramCommandHandler(credentials, tradeMonitor);
-        commandHandler.start();
-
-        log.info("xit-mc started in PAPER trading mode with {} market data. Send /track <symbol> to Telegram to begin.",
-                liveData ? "LIVE Upstox" : "simulated");
-
-        Runtime.getRuntime().addShutdownHook(new Thread(commandHandler::stop));
+    /**
+     * {@code TRADE_STATE_DIR} overrides the directory (not the file --
+     * with N accounts, one fixed file for all of them would let one
+     * account's restart clobber another's state); otherwise
+     * {@code ~/.xit-mc/open-trades/}. One file per account inside it,
+     * named by accountId.
+     */
+    private static Path tradeStateFilePath(TraderAccount account) {
+        String override = System.getenv("TRADE_STATE_DIR");
+        Path dir = (override == null || override.isBlank())
+                ? Paths.get(System.getProperty("user.home"), ".xit-mc", "open-trades")
+                : Paths.get(override);
+        return dir.resolve(account.getAccountId() + ".json");
     }
 
     /**
      * One WebSocket subscription per trade, scoped to just that trade's
-     * instrument. Fine at the handful-of-open-trades scale this runs at; if
-     * open trades ever outgrow Upstox's concurrent-connection allowance,
-     * this becomes one shared streamer fanning out by instrument key.
+     * instrument, authenticated with this account's own Analytics Token.
+     * Fine at the handful-of-open-trades scale this runs at; if open trades
+     * ever outgrow Upstox's concurrent-connection allowance, this becomes
+     * one shared streamer fanning out by instrument key.
      */
     private static Function<TradeFillEvent, MarketDataFeed> liveFeedFactory(UpstoxDataCredentials dataCredentials) {
         return fill -> new UpstoxMarketDataFeed(dataCredentials, Set.of(fill.getInstrumentKey()));
     }
 
     /**
-     * Symbol lookup plus price/quantity defaulting. Requires the instrument
-     * master (a ~2 MB download, refreshed weekly on Wednesdays or on demand
-     * via /refresh) and CAPITAL_PER_TRADE, which is what a bare
-     * {@code /track <symbol>} sizes against.
+     * Symbol lookup plus price/quantity defaulting, sized against this
+     * account's own capital and risk settings. The instrument master itself
+     * is shared -- see {@code sharedCatalog} in {@link #main}.
      */
-    private static TrackRequestResolver instrumentAwareResolver(UpstoxDataCredentials dataCredentials,
-                                                              ActiveLadder activeLadder,
-                                                              RiskSettings riskSettings) throws IOException {
-
-        String capital = System.getenv("CAPITAL_PER_TRADE");
-        if (capital == null || capital.isBlank()) {
-            throw new IllegalStateException(
-                    "Missing required environment variable: CAPITAL_PER_TRADE (used to size a bare /track <symbol>)");
-        }
-
+    private static TrackRequestResolver instrumentAwareResolver(TraderAccount account,
+                                                                  UpstoxDataCredentials dataCredentials,
+                                                                  InstrumentCatalog sharedCatalog,
+                                                                  ActiveLadder activeLadder,
+                                                                  RiskSettings riskSettings) {
         return new InstrumentAwareTrackRequestResolver(
-                InstrumentCatalog.loadFrom(new InstrumentMasterLoader()),
+                sharedCatalog,
                 new UpstoxQuoteService(dataCredentials),
-                new PositionSizer(Double.parseDouble(capital), riskSettings, activeLadder));
-    }
-
-    /**
-     * Optional second ceiling. Where both apply the smaller wins, so capital
-     * caps exposure and risk caps the loss -- a wide stop on a small
-     * position rather than a narrow stop that ordinary noise would trip.
-     */
-    private static double maxRiskFromEnv() {
-
-        String maxRisk = System.getenv("MAX_RISK_PER_TRADE");
-        double value = maxRisk == null || maxRisk.isBlank() ? 0 : Double.parseDouble(maxRisk);
-
-        if (value <= 0) {
-            log.warn("MAX_RISK_PER_TRADE is not set — position size is capped by capital alone, so a hard-stop "
-                    + "loss is CAPITAL_PER_TRADE x the set's hard stop ({}% on OPTIONS). Set one with /risk.",
-                    (int) (MilestoneLadder.optionsLadder().getHardStopPercent() * 100));
-        }
-        return value;
+                new PositionSizer(account.getCapitalPerTrade(), riskSettings, activeLadder));
     }
 
     /**
      * Off unless EOD_EXIT_TIME is set. Closing positions on a clock is a
      * decision with real consequences, so it is opted into rather than
      * assumed -- and a wrong or misread time would square off a position
-     * hours early.
+     * hours early. Process-wide: every account closes out at the same
+     * market-clock time, since that is what the market itself does.
      * <p>
      * The zone defaults to the market's, not the machine's: a VM on UTC
      * would otherwise fire five and a half hours late, well after the
      * broker had already squared the position off itself.
      */
-    private static EndOfDaySchedule endOfDaySchedule(TradeMonitor tradeMonitor) {
+    private static EndOfDaySchedule endOfDaySchedule(Map<String, TradeMonitor> monitorsByAccountId) {
 
         String configured = System.getenv("EOD_EXIT_TIME");
         if (configured == null || configured.isBlank()) {
@@ -239,30 +309,36 @@ public class Main {
         LocalTime cutoff = LocalTime.parse(configured.trim());
         ZoneId zone = ZoneId.of(System.getenv().getOrDefault("EOD_TIMEZONE", "Asia/Kolkata"));
 
-        return new EndOfDaySchedule(cutoff, zone, tradeMonitor::onEndOfDay);
+        return new EndOfDaySchedule(cutoff, zone,
+                () -> monitorsByAccountId.values().forEach(TradeMonitor::onEndOfDay));
     }
 
     /**
      * Real orders require an explicit opt-in, a usable daily token and a
      * registered static IP. Only the first is a code concern; the flag
      * exists so that nothing else -- MARKET_DATA=live in particular -- can
-     * imply permission to sell.
+     * imply permission to sell. Process-wide: either the deployment places
+     * real orders or it does not.
      */
-    private static ExitOrderPlacer exitOrderPlacer(TradingToken tradingToken) {
+    private static ExitOrderPlacer exitOrderPlacer(TradingToken tradingToken, boolean placeRealOrders) {
 
-        if (!Boolean.parseBoolean(System.getenv().getOrDefault("PLACE_REAL_ORDERS", "false"))) {
-            log.info("PLACE_REAL_ORDERS is off — exits are recorded and reported, no broker order is placed.");
+        if (!placeRealOrders) {
             return new PaperExitOrderPlacer();
         }
 
         String product = System.getenv().getOrDefault("ORDER_PRODUCT", "I");
-        log.warn("PLACE_REAL_ORDERS is ON — exits will place REAL SELL orders (product={}). "
-                + "This needs a /token each day and a registered static IP.", product);
-
         return new UpstoxExitOrderPlacer(tradingToken, product);
     }
 
     private static MarketDataFeed simulatedFeed(TradeFillEvent fill) {
         return new SimulatedMarketDataFeed(fill.getAveragePrice(), PAPER_VOLATILITY_PERCENT);
+    }
+
+    private static String requireEnv(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("Missing required environment variable: " + name);
+        }
+        return value;
     }
 }

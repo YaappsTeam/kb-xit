@@ -1,6 +1,8 @@
 # xit-mc — Development Documentation
 
 > Status snapshot as of 2026-08-08. This document describes what has actually been implemented in the codebase so far — not the target design (see PRODUCT_REQUIREMENTS.md for that). Sections are marked ✅ Implemented, 🟡 Partial (stub/scaffolded), or ⬜ Not started.
+>
+> **Predates Phase 3.5 (multi-account support).** `Main` now builds one `TradeMonitor` per registered account instead of a single process-wide one, and a new `AccountRegistry`/`TraderAccount` pair (in `session`/`domain`) drives that. See IMPLEMENTATION_PLAN.md Phase 3.5 for the current design; this file's package layout and test-count summary below have not been re-walked against it.
 
 ## 1. What this project is
 

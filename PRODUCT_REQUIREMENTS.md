@@ -260,15 +260,20 @@ No secrets are stored in the repository. A single bot token is process-wide; eve
 | Variable / field | Purpose | Scope | Required |
 |---|---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Telegram Bot API token | Process-wide | Yes |
+| `ACCOUNTS_FILE` | Path to the account registry (default `accounts.properties`) | Process-wide | No |
 | Per-account: `telegramChatId` | Which chat this account's trades and alerts belong to | Per account | Yes |
-| Per-account: `upstoxApiKey` / `upstoxApiSecret` / `upstoxRedirectUri` | Upstox OAuth app credentials | Per account | For live mode |
+| Per-account: `upstoxApiKey` / `upstoxApiSecret` / `upstoxRedirectUri` | Upstox OAuth app credentials (not yet consumed by any wired code path — see DEVELOPMENT.md) | Per account | For live mode |
 | Per-account: `upstoxAnalyticsToken` | Year-valid, read-only — live market data, no daily login | Per account | For live market data |
+| Per-account: `upstoxSandbox` | Route this account's Upstox calls to the sandbox API (default `false`) | Per account | No |
 | Per-account: daily order token (supplied via that account's own `/token`) | Order placement + position queries; expires at 3:30 AM | Per account | For real orders |
 | Per-account: `capitalPerTrade` / `maxRiskPerTrade` | Position sizing | Per account | For live mode |
-| `UPSTOX_SANDBOX` | Use sandbox API (`true`/`false`, default `false`) | Process-wide | No |
+| Per-account: `defaultMilestoneSetName` | Which milestone set new trades open with | Per account | Yes |
 | `TRADING_MODE` | `paper` or `live` (default `paper`) | Process-wide | No |
+| `MARKET_DATA` | `simulated` or `live` (default `simulated`), applies to every account | Process-wide | No |
+| `TRADE_STATE_DIR` | Directory holding each account's `<accountId>.json` persistence file (default `~/.xit-mc/open-trades/`) | Process-wide | No |
+| `WATCH_BROKER_FILLS` / `PLACE_REAL_ORDERS` / `ORDER_PRODUCT` / `EOD_EXIT_TIME` / `EOD_TIMEZONE` | Deployment-wide operational switches — every account runs the same way | Process-wide | No |
 
-Per-account fields are never environment variables in the single-account sense (`UPSTOX_API_KEY` etc. no longer make sense once N accounts share a process) — see IMPLEMENTATION_PLAN.md Phase 3.5 for the registry design that replaces them. The same rule applies regardless of storage shape: nothing lives in git, ever.
+Per-account fields are never environment variables in the single-account sense (`UPSTOX_API_KEY` etc. no longer make sense once N accounts share a process) — they live in `accounts.properties` instead, one file, gitignored, loaded by `AccountRegistry` at startup. See IMPLEMENTATION_PLAN.md Phase 3.5 for the registry design. The same rule applies regardless of storage shape: nothing lives in git, ever.
 
 ## 7. Non-functional requirements
 
