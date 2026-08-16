@@ -60,8 +60,12 @@
        Telegram-triggered log line, TradeMonitor sets its own context
        for the two feed-triggered entry points (detected fills, price
        updates), 0.31.0 /health command (story #23): feed state and
-       last-tick age per open trade, daily token validity. -->
-  <version>0.31.0-SNAPSHOT</version>
+       last-tick age per open trade, daily token validity, 0.32.0
+       graceful shutdown (story #23): TradeMonitor#shutdown closes
+       every open trade's feed and logs its final state; Main's
+       shutdown hook calls it for every account, not just the
+       Telegram poller. -->
+  <version>0.32.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

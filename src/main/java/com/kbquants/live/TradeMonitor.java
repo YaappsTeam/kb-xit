@@ -1291,6 +1291,27 @@ public class TradeMonitor implements TelegramCommandListener {
         notifier.send(sb.toString());
     }
 
+    /**
+     * Stops every still-open trade's feed and logs its final state, for an
+     * orderly process shutdown (IMPLEMENTATION_PLAN.md step 4.3) --
+     * {@code Main} calls this for every account's monitor from its
+     * shutdown hook. Deliberately quiet on Telegram: a restart is routine
+     * operations, not something every account needs a message about, and
+     * open trades are restored from {@link #restore()} on the next start
+     * regardless.
+     * <p>
+     * Safe with zero active trades, and safe if a feed is already stopped
+     * -- {@link #stopFeed} already tolerates both.
+     */
+    public void shutdown() {
+        openTrades().forEach(trade -> {
+            stopFeed(trade);
+            log.info("Shutdown: orderId={} instrument={} phase={} lastPrice={} stopLoss={}",
+                    trade.fill.getOrderId(), trade.fill.getInstrumentKey(), trade.context.getCurrentPhase(),
+                    trade.lastPrice, trade.context.getCurrentStopLoss());
+        });
+    }
+
     private void forceExit(ActiveTrade trade) {
         double exitPrice = trade.lastPrice > 0 ? trade.lastPrice : trade.fill.getAveragePrice();
 
