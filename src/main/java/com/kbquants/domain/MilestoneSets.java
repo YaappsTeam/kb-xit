@@ -8,19 +8,46 @@ import java.util.Optional;
 /**
  * The milestone sets available to choose between at runtime.
  * <p>
- * Deliberately a fixed, in-code registry rather than configuration: the
- * numbers encode trading intent that wants reviewing in a diff, not
- * editing in a properties file between trades. Which set is <i>active</i>
- * is a runtime choice; what the sets contain is not.
+ * Ships with two built-in sets (below), used as-is unless {@link
+ * #configure} replaces them -- {@code Main} calls it once at startup with
+ * whatever {@code config.yml}'s {@code milestoneLadders} section produced
+ * (story #22). With no config file, or one that doesn't mention
+ * milestone ladders, these hardcoded defaults are exactly what's in
+ * effect; nothing outside this class needs to know the difference.
  */
 public final class MilestoneSets {
 
-    private static final Map<String, MilestoneLadder> SETS = buildSets();
+    private static volatile Map<String, MilestoneLadder> SETS = buildDefaultSets();
 
     private MilestoneSets() {
     }
 
-    private static Map<String, MilestoneLadder> buildSets() {
+    /**
+     * Replaces the registry with externally-supplied ladders -- called
+     * once at startup, before anything reads {@link #available()},
+     * {@link #names()} or {@link #byName}. A null or empty map is a
+     * no-op: it means the config had nothing to say about milestone
+     * ladders, so the hardcoded defaults stay in effect.
+     */
+    public static void configure(Map<String, MilestoneLadder> ladders) {
+        if (ladders == null || ladders.isEmpty()) {
+            return;
+        }
+        SETS = Map.copyOf(ladders);
+    }
+
+    /**
+     * Test-support only: restores the hardcoded defaults after a test
+     * calls {@link #configure}. This registry is process-global mutable
+     * state (CODING_STANDARDS.md §9 forbids tests leaving shared mutable
+     * state behind for the next one), so any test that configures it must
+     * call this in an {@code @AfterEach}.
+     */
+    static void resetToDefaultsForTests() {
+        SETS = buildDefaultSets();
+    }
+
+    private static Map<String, MilestoneLadder> buildDefaultSets() {
         LinkedHashMap<String, MilestoneLadder> sets = new LinkedHashMap<>();
         for (MilestoneLadder ladder : List.of(MilestoneLadder.equityLadder(), MilestoneLadder.optionsLadder())) {
             sets.put(ladder.getName(), ladder);

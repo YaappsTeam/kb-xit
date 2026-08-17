@@ -1,5 +1,7 @@
 package com.kbquants;
 
+import com.kbquants.config.AppConfig;
+import com.kbquants.config.ConfigLoader;
 import com.kbquants.domain.ActiveLadder;
 import com.kbquants.domain.MilestoneLadder;
 import com.kbquants.domain.MilestoneSets;
@@ -94,6 +96,15 @@ public class Main {
     private static final double PAPER_VOLATILITY_PERCENT = 0.3;
 
     public static void main(String[] args) throws IOException {
+
+        // Optional and opt-in: config.yml is absent for every deployment
+        // that hasn't chosen to create one, and that must not change any
+        // behavior below -- see story #22's "no behavior change unless
+        // opted in" acceptance criterion. Loaded first because milestone
+        // ladders (if configured) must be in place before anything reads
+        // MilestoneSets.
+        Optional<AppConfig> appConfig = ConfigLoader.load(ConfigLoader.defaultPath());
+        appConfig.ifPresent(config -> MilestoneSets.configure(ConfigLoader.toMilestoneLadders(config)));
 
         String tradingMode = System.getenv().getOrDefault("TRADING_MODE", "paper");
         if (!"paper".equalsIgnoreCase(tradingMode)) {

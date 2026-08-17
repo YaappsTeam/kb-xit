@@ -1,6 +1,10 @@
 package com.kbquants.domain;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -139,5 +143,44 @@ class MilestoneSetsTest {
             assertFalse(ladder.phaseTriggerFraction(Phase.PHASE_2) >= ladder.phaseTriggerFraction(Phase.PHASE_3),
                     ladder.getName());
         }
+    }
+
+    // ---- configure() (story #22): milestone ladders sourced from config.yml ----
+
+    /**
+     * configure() replaces process-global static state -- CODING_STANDARDS.md
+     * §9 forbids a test leaving shared mutable state for the next one, so
+     * every test in this section restores the hardcoded defaults afterward.
+     */
+    @AfterEach
+    void resetMilestoneSetsToDefaults() {
+        MilestoneSets.resetToDefaultsForTests();
+    }
+
+    @Test
+    void configureReplacesTheRegistry() {
+
+        MilestoneLadder custom = new MilestoneLadder("CUSTOM", List.of(new Milestone(2.0, null, 0.0)), 0.15);
+
+        MilestoneSets.configure(Map.of("CUSTOM", custom));
+
+        assertEquals(List.of("CUSTOM"), MilestoneSets.names());
+        assertTrue(MilestoneSets.byName("EQUITY").isEmpty(), "the built-in sets are gone once configure() supplies any");
+    }
+
+    @Test
+    void configureWithNullIsANoOp() {
+
+        MilestoneSets.configure(null);
+
+        assertEquals(List.of("EQUITY", "OPTIONS"), MilestoneSets.names());
+    }
+
+    @Test
+    void configureWithAnEmptyMapIsANoOp() {
+
+        MilestoneSets.configure(Map.of());
+
+        assertEquals(List.of("EQUITY", "OPTIONS"), MilestoneSets.names());
     }
 }

@@ -70,8 +70,12 @@
        loader (story #22): AppConfig/MilestoneLadderConfig/
        MilestoneConfig plus ConfigLoader, parsing an optional YAML
        file's milestoneLadders section into MilestoneLadder objects;
-       not yet wired into anything that uses it. -->
-  <version>0.33.0-SNAPSHOT</version>
+       not yet wired into anything that uses it, 0.34.0 MilestoneSets
+       sourced from config.yml (story #22): configure() replaces the
+       registry when Main finds a milestoneLadders section, and is a
+       no-op otherwise, so with no config file behavior is unchanged
+       from the previous hardcoded EQUITY/OPTIONS-only registry. -->
+  <version>0.34.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>
