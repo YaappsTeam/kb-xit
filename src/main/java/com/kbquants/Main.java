@@ -106,7 +106,7 @@ public class Main {
         Optional<AppConfig> appConfig = ConfigLoader.load(ConfigLoader.defaultPath());
         appConfig.ifPresent(config -> MilestoneSets.configure(ConfigLoader.toMilestoneLadders(config)));
 
-        String tradingMode = System.getenv().getOrDefault("TRADING_MODE", "paper");
+        String tradingMode = resolveSetting(appConfig, AppConfig::getTradingMode, "TRADING_MODE", "paper");
         if (!"paper".equalsIgnoreCase(tradingMode)) {
             log.error("TRADING_MODE={} is not supported yet -- only 'paper' is wired up so far. See IMPLEMENTATION_PLAN.md Phase 3.",
                     tradingMode);
@@ -114,7 +114,7 @@ public class Main {
             return;
         }
 
-        String marketData = System.getenv().getOrDefault("MARKET_DATA", "simulated");
+        String marketData = resolveSetting(appConfig, AppConfig::getMarketData, "MARKET_DATA", "simulated");
         if (!"simulated".equalsIgnoreCase(marketData) && !"live".equalsIgnoreCase(marketData)) {
             log.error("MARKET_DATA={} is not recognised -- expected 'simulated' or 'live'.", marketData);
             System.exit(1);
@@ -131,21 +131,31 @@ public class Main {
         // logged once here rather than once per account in
         // buildTradeMonitor -- the same message N times would look like a
         // per-account decision when it is a single process-wide one.
-        boolean watchBrokerFills = Boolean.parseBoolean(
-                System.getenv().getOrDefault("WATCH_BROKER_FILLS", "false"));
+        boolean watchBrokerFills = resolveBooleanSetting(appConfig, AppConfig::getWatchBrokerFills,
+                "WATCH_BROKER_FILLS", false);
         if (watchBrokerFills) {
             log.info("WATCH_BROKER_FILLS is on — positions opened at any account's broker will be offered for "
                     + "adoption in that account's chat. Nothing is managed until accepted. Needs a /token first.");
         }
 
-        boolean placeRealOrders = Boolean.parseBoolean(
-                System.getenv().getOrDefault("PLACE_REAL_ORDERS", "false"));
+        boolean placeRealOrders = resolveBooleanSetting(appConfig, AppConfig::getPlaceRealOrders,
+                "PLACE_REAL_ORDERS", false);
         if (placeRealOrders) {
             log.warn("PLACE_REAL_ORDERS is ON — exits will place REAL SELL orders for every account. "
                     + "Each needs its own /token daily and a registered static IP.");
         } else {
             log.info("PLACE_REAL_ORDERS is off — exits are recorded and reported, no broker order is placed.");
         }
+
+        // Also process-wide, resolved once here rather than re-read per
+        // account or per schedule -- see resolveSetting's config/env/default
+        // precedence (story #22).
+        String orderProduct = resolveSetting(appConfig, AppConfig::getOrderProduct, "ORDER_PRODUCT", "I");
+        String tradeStateDir = resolveSetting(appConfig, AppConfig::getTradeStateDir, "TRADE_STATE_DIR", null);
+        String eodExitTime = resolveSetting(appConfig, AppConfig::getEodExitTime, "EOD_EXIT_TIME", null);
+        String eodTimezone = resolveSetting(appConfig, AppConfig::getEodTimezone, "EOD_TIMEZONE", "Asia/Kolkata");
+        String instrumentRefreshTime = resolveSetting(appConfig, AppConfig::getInstrumentRefreshTime,
+                "INSTRUMENT_REFRESH_TIME", "08:45");
 
         // One download, shared by every account -- the instrument master is
         // public market data, not a per-account credential, so there is
@@ -165,18 +175,19 @@ public class Main {
         Map<String, TradeMonitor> monitorsByAccountId = new LinkedHashMap<>();
         Map<String, TradeMonitor> monitorsByChatId = new LinkedHashMap<>();
         for (TraderAccount account : registry.all()) {
-            TradeMonitor monitor = buildTradeMonitor(
-                    account, liveData, sharedCatalog, botToken, watchBrokerFills, placeRealOrders);
+            TradeMonitor monitor = buildTradeMonitor(account, liveData, sharedCatalog, botToken, watchBrokerFills,
+                    placeRealOrders, orderProduct, tradeStateDir);
             monitorsByAccountId.put(account.getAccountId(), monitor);
             monitorsByChatId.put(account.getTelegramChatId(), monitor);
         }
 
-        DailyWallClockSchedule endOfDay = endOfDaySchedule(monitorsByAccountId);
+        DailyWallClockSchedule endOfDay = endOfDaySchedule(monitorsByAccountId, eodExitTime, eodTimezone);
         if (endOfDay != null) {
             endOfDay.start();
         }
 
-        DailyWallClockSchedule morningRefresh = morningInstrumentRefreshSchedule(sharedCatalog);
+        DailyWallClockSchedule morningRefresh =
+                morningInstrumentRefreshSchedule(sharedCatalog, instrumentRefreshTime, eodTimezone);
         if (morningRefresh != null) {
             morningRefresh.start();
         }
@@ -209,7 +220,8 @@ public class Main {
      */
     private static TradeMonitor buildTradeMonitor(TraderAccount account, boolean liveData,
                                                     InstrumentCatalog sharedCatalog, String botToken,
-                                                    boolean watchBrokerFills, boolean placeRealOrders)
+                                                    boolean watchBrokerFills, boolean placeRealOrders,
+                                                    String orderProduct, String tradeStateDir)
             throws IOException {
 
         TelegramNotifier notifier = new TelegramNotifier(
@@ -241,14 +253,14 @@ public class Main {
         // Open trades are written to disk and restored on the next start,
         // one file per account so a restart cannot cross-restore one
         // trader's positions under another's identity.
-        TradeStore tradeStore = new JsonTradeStore(tradeStateFilePath(account));
+        TradeStore tradeStore = new JsonTradeStore(tradeStateFilePath(account, tradeStateDir));
 
         // Supplied at runtime via /token, because the daily Upstox login is
         // interactive and cannot be automated -- each account supplies its
         // own, in its own chat.
         TradingToken tradingToken = new TradingToken(ZoneId.of("Asia/Kolkata"));
 
-        ExitOrderPlacer exitOrderPlacer = exitOrderPlacer(tradingToken, placeRealOrders);
+        ExitOrderPlacer exitOrderPlacer = exitOrderPlacer(tradingToken, placeRealOrders, orderProduct);
 
         // The broker's order stream carries fills for the whole account, so
         // it is only ever paired with explicit adoption -- the two are set
@@ -283,17 +295,16 @@ public class Main {
     }
 
     /**
-     * {@code TRADE_STATE_DIR} overrides the directory (not the file --
-     * with N accounts, one fixed file for all of them would let one
-     * account's restart clobber another's state); otherwise
-     * {@code ~/.xit-mc/open-trades/}. One file per account inside it,
-     * named by accountId.
+     * {@code tradeStateDir} (resolved from config.yml/{@code TRADE_STATE_DIR}
+     * in {@link #main}) overrides the directory (not the file -- with N
+     * accounts, one fixed file for all of them would let one account's
+     * restart clobber another's state); otherwise {@code ~/.xit-mc/open-trades/}.
+     * One file per account inside it, named by accountId.
      */
-    private static Path tradeStateFilePath(TraderAccount account) {
-        String override = System.getenv("TRADE_STATE_DIR");
-        Path dir = (override == null || override.isBlank())
+    private static Path tradeStateFilePath(TraderAccount account, String tradeStateDir) {
+        Path dir = (tradeStateDir == null || tradeStateDir.isBlank())
                 ? Paths.get(System.getProperty("user.home"), ".xit-mc", "open-trades")
-                : Paths.get(override);
+                : Paths.get(tradeStateDir);
         return dir.resolve(account.getAccountId() + ".json");
     }
 
@@ -338,27 +349,29 @@ public class Main {
     }
 
     /**
-     * Off unless EOD_EXIT_TIME is set. Closing positions on a clock is a
-     * decision with real consequences, so it is opted into rather than
-     * assumed -- and a wrong or misread time would square off a position
-     * hours early. Process-wide: every account closes out at the same
-     * market-clock time, since that is what the market itself does.
+     * Off unless {@code eodExitTime} (resolved from config.yml/{@code
+     * EOD_EXIT_TIME} in {@link #main}) is set. Closing positions on a
+     * clock is a decision with real consequences, so it is opted into
+     * rather than assumed -- and a wrong or misread time would square off
+     * a position hours early. Process-wide: every account closes out at
+     * the same market-clock time, since that is what the market itself
+     * does.
      * <p>
      * The zone defaults to the market's, not the machine's: a VM on UTC
      * would otherwise fire five and a half hours late, well after the
      * broker had already squared the position off itself.
      */
-    private static DailyWallClockSchedule endOfDaySchedule(Map<String, TradeMonitor> monitorsByAccountId) {
+    private static DailyWallClockSchedule endOfDaySchedule(Map<String, TradeMonitor> monitorsByAccountId,
+                                                              String eodExitTime, String eodTimezone) {
 
-        String configured = System.getenv("EOD_EXIT_TIME");
-        if (configured == null || configured.isBlank()) {
+        if (eodExitTime == null || eodExitTime.isBlank()) {
             log.info("EOD_EXIT_TIME is not set — no end-of-day close; your broker will square off intraday "
                     + "positions on its own terms.");
             return null;
         }
 
-        LocalTime cutoff = LocalTime.parse(configured.trim());
-        ZoneId zone = ZoneId.of(System.getenv().getOrDefault("EOD_TIMEZONE", "Asia/Kolkata"));
+        LocalTime cutoff = LocalTime.parse(eodExitTime.trim());
+        ZoneId zone = ZoneId.of(eodTimezone);
 
         return new DailyWallClockSchedule("end-of-day close", cutoff, zone,
                 () -> monitorsByAccountId.values().forEach(TradeMonitor::onEndOfDay));
@@ -368,23 +381,26 @@ public class Main {
      * Off unless {@code sharedCatalog} exists (i.e. MARKET_DATA=live) --
      * there is nothing to refresh in simulated mode. Runs once each
      * morning so the NIFTY strike window reflects that day's spot without
-     * needing a restart; the default time is ahead of NSE F&O's 09:15 IST
-     * open so the window is ready before the first /track of the day.
+     * needing a restart; {@code instrumentRefreshTime} (resolved from
+     * config.yml/{@code INSTRUMENT_REFRESH_TIME} in {@link #main}) defaults
+     * ahead of NSE F&O's 09:15 IST open so the window is ready before the
+     * first /track of the day.
      * <p>
      * A refresh failure here is not fatal and not reported to any chat --
      * unlike /refresh, nobody is waiting on this one synchronously. It
      * logs, same as {@link InstrumentCatalog#refresh()} always does, and
      * the previous window stays in force until it succeeds.
      */
-    private static DailyWallClockSchedule morningInstrumentRefreshSchedule(InstrumentCatalog sharedCatalog) {
+    private static DailyWallClockSchedule morningInstrumentRefreshSchedule(InstrumentCatalog sharedCatalog,
+                                                                             String instrumentRefreshTime,
+                                                                             String eodTimezone) {
 
         if (sharedCatalog == null) {
             return null;
         }
 
-        LocalTime cutoff = LocalTime.parse(
-                System.getenv().getOrDefault("INSTRUMENT_REFRESH_TIME", "08:45"));
-        ZoneId zone = ZoneId.of(System.getenv().getOrDefault("EOD_TIMEZONE", "Asia/Kolkata"));
+        LocalTime cutoff = LocalTime.parse(instrumentRefreshTime);
+        ZoneId zone = ZoneId.of(eodTimezone);
 
         return new DailyWallClockSchedule("morning instrument refresh", cutoff, zone,
                 () -> log.info("Morning instrument refresh: {}", sharedCatalog.refresh()));
@@ -397,14 +413,46 @@ public class Main {
      * imply permission to sell. Process-wide: either the deployment places
      * real orders or it does not.
      */
-    private static ExitOrderPlacer exitOrderPlacer(TradingToken tradingToken, boolean placeRealOrders) {
+    private static ExitOrderPlacer exitOrderPlacer(TradingToken tradingToken, boolean placeRealOrders,
+                                                     String orderProduct) {
 
         if (!placeRealOrders) {
             return new PaperExitOrderPlacer();
         }
 
-        String product = System.getenv().getOrDefault("ORDER_PRODUCT", "I");
-        return new UpstoxExitOrderPlacer(tradingToken, product);
+        return new UpstoxExitOrderPlacer(tradingToken, orderProduct);
+    }
+
+    /**
+     * Config.yml value, then the named env var, then {@code defaultValue}
+     * (which may itself be null -- some settings, like {@code
+     * EOD_EXIT_TIME}, mean "disabled" when unset rather than falling back
+     * to a real default). With no config file this behaves exactly as the
+     * env-var-only lookups it replaces (story #22).
+     */
+    private static String resolveSetting(Optional<AppConfig> config, Function<AppConfig, String> configGetter,
+                                          String envVarName, String defaultValue) {
+        if (config.isPresent()) {
+            String value = configGetter.apply(config.get());
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        String env = System.getenv(envVarName);
+        return (env == null || env.isBlank()) ? defaultValue : env;
+    }
+
+    private static boolean resolveBooleanSetting(Optional<AppConfig> config,
+                                                   Function<AppConfig, Boolean> configGetter,
+                                                   String envVarName, boolean defaultValue) {
+        if (config.isPresent()) {
+            Boolean value = configGetter.apply(config.get());
+            if (value != null) {
+                return value;
+            }
+        }
+        String env = System.getenv(envVarName);
+        return env == null ? defaultValue : Boolean.parseBoolean(env);
     }
 
     private static MarketDataFeed simulatedFeed(TradeFillEvent fill) {

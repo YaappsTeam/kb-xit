@@ -74,8 +74,15 @@
        sourced from config.yml (story #22): configure() replaces the
        registry when Main finds a milestoneLadders section, and is a
        no-op otherwise, so with no config file behavior is unchanged
-       from the previous hardcoded EQUITY/OPTIONS-only registry. -->
-  <version>0.34.0-SNAPSHOT</version>
+       from the previous hardcoded EQUITY/OPTIONS-only registry,
+       0.35.0 the scattered process-wide env vars (TRADING_MODE,
+       MARKET_DATA, WATCH_BROKER_FILLS, PLACE_REAL_ORDERS,
+       EOD_EXIT_TIME, EOD_TIMEZONE, INSTRUMENT_REFRESH_TIME,
+       TRADE_STATE_DIR, ORDER_PRODUCT) now resolve config.yml first,
+       env var second, hardcoded default third (story #22), via one
+       resolveSetting/resolveBooleanSetting helper reused for all of
+       them instead of copy-pasted per setting. -->
+  <version>0.35.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>
