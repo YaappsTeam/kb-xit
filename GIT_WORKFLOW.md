@@ -102,11 +102,20 @@ reasoning. Then implement the better-fitting approach. This means:
   it once every one of its subtasks is closed — a story with any subtask
   still open stays open, even if the main work is done, so partial
   completion is visible at a glance.
+- **Delete the head branch once the PR is merged**, and prune the stale
+  local copy (`git remote prune origin`, then `git branch -d`). Prefer to
+  make this automatic — GitHub's *Automatically delete head branches*
+  repo setting (`gh repo edit --delete-branch-on-merge`) does it on every
+  merge, so it can't be forgotten. Left undone, merged branches
+  accumulate until `git branch -a` no longer tells you what's actually in
+  flight, which is the whole reason to look at it.
 - If a repo-level or otherwise hard-to-reverse action becomes ready as
-  part of a story (archiving a repository, deleting a branch, rotating a
-  credential), track it as its own subtask and hold it open until a human
-  explicitly says to proceed — the same confirmation rule as merging, but
-  for actions bigger than a single PR.
+  part of a story (archiving a repository, deleting a *long-lived* branch,
+  rotating a credential), track it as its own subtask and hold it open
+  until a human explicitly says to proceed — the same confirmation rule as
+  merging, but for actions bigger than a single PR. Routine head-branch
+  cleanup above is exempt: those commits already live on the shared
+  branch, so deleting the pointer discards nothing.
 
 ## 5. Keeping the tracker honest after the fact
 
