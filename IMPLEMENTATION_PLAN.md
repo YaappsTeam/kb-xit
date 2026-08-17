@@ -411,9 +411,9 @@ See `REPO_STRATEGY.md` for the shape decisions this step executes. Recap: `marke
 
 **Rollback:** the merge is a single commit; if anything downstream goes wrong `git revert` on that merge reinstates the pre-merge state without touching the filter-repo scratch clone. `kb-test` on GitHub is not touched until 4.0.j, so it can always be re-cloned and the merge re-attempted.
 
-### Step 4.1 — External configuration (YAML)
+### Step 4.1 — External configuration (YAML) — DONE
 
-All thresholds, percentages, and the milestone ladder configurable via `config.yml`.
+Landed via story #22. `config.yml` is optional and opt-in: absent (the default), behavior is byte-for-byte unchanged from before this step. Its `milestoneLadders` section, when present, replaces `MilestoneSets`'s registry entirely — including the built-in `EQUITY`/`OPTIONS` sets, per an explicit operator decision overriding `MilestoneSets`'s previous "code-only, reviewed in a diff" design note (see story #22's issue body for the full reasoning). The scattered process-wide env vars (`TRADING_MODE`, `MARKET_DATA`, `WATCH_BROKER_FILLS`, `PLACE_REAL_ORDERS`, `EOD_EXIT_TIME`, `EOD_TIMEZONE`, `INSTRUMENT_REFRESH_TIME`, `TRADE_STATE_DIR`, `ORDER_PRODUCT`) became optional overridable keys in the same file, precedence config → env var → hardcoded default. `TELEGRAM_BOT_TOKEN` and `ACCOUNTS_FILE` stay env-var-only.
 
 ### Step 4.2 — PHASE_4 automation
 
@@ -433,7 +433,7 @@ Landed via story #24. **Differently than originally planned here** — see `REPO
 
 ### Acceptance criteria (Phase 4)
 
-- [ ] All thresholds configurable without code changes
+- [x] All thresholds configurable without code changes (story #22)
 - [ ] Trades auto-close at EOD
 - [x] Health status queryable; logs carry trade correlation IDs (story #23)
 - [x] Historical backtesting works against real past data (story #24)

@@ -82,8 +82,13 @@
        env var second, hardcoded default third (story #22), via one
        resolveSetting/resolveBooleanSetting helper reused for all of
        them instead of copy-pasted per setting, 0.35.1 config.yml.example,
-       gitignore, and an end-to-end no-config-file test (story #22). -->
-  <version>0.35.1-SNAPSHOT</version>
+       gitignore, and an end-to-end no-config-file test (story #22),
+       0.35.2 planning docs updated for config.yml (story #22):
+       IMPLEMENTATION_PLAN.md step 4.1 marked DONE, PRODUCT_REQUIREMENTS.md's
+       Phase 4 line, DEVELOPMENT.md's stale "no configuration file"
+       gap note corrected rather than left standing, README.md gains
+       a Configuration section. -->
+  <version>0.35.2-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>

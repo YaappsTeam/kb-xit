@@ -109,6 +109,28 @@ A message from a chat id that isn't registered gets a polite refusal and touches
 
 `ACCOUNTS_FILE` overrides the path if you don't want `accounts.properties` in the working directory.
 
+## Configuration (config.yml)
+
+Everything below (`MARKET_DATA`, `EOD_EXIT_TIME`, and the rest) is read from an environment variable by default, and that's still all you need — `config.yml` is entirely optional. Copy `config.yml.example` to `config.yml` (gitignored) only if you'd rather have these in one file than scattered across your shell/`run.sh`, or want to change the milestone ladders themselves without a code change.
+
+Precedence per setting: `config.yml` value, then the env var, then the hardcoded default. With no `config.yml`, behavior is unchanged.
+
+```yaml
+marketData: "live"
+eodExitTime: "15:15"
+
+milestoneLadders:
+  EQUITY:
+    hardStopPercent: 0.20
+    rungs:
+      - percent: 1.0
+      - percent: 2.0
+        phaseTransition: PHASE_2
+      # ...
+```
+
+The `milestoneLadders` section, when present, replaces the built-in `EQUITY`/`OPTIONS` sets entirely — see `config.yml.example` for the full default numbers written out, ready to copy and edit. `CONFIG_FILE` overrides the path if you don't want `config.yml` in the working directory. `TELEGRAM_BOT_TOKEN` and `ACCOUNTS_FILE` aren't configurable here — both are needed before this file's own location is even resolved.
+
 ## Live market data (paper trades, real prices)
 
 Set `MARKET_DATA=live` to drive the exit engine from real Upstox ticks instead of the simulated random walk, for every registered account. Trades stay on paper — nothing places a broker order.
