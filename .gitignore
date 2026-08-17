@@ -11,6 +11,12 @@ run.ps1
 # accounts.properties.example. Contains every trader's Upstox
 # credentials and Telegram chat id. Never commit.
 accounts.properties
+
+# Optional process-wide config -- filled in from config.yml.example
+# (story #22). Never commit: nothing sensitive lives here today, but
+# a deployment's actual thresholds are still local configuration, not
+# something to commit alongside the code that reads them.
+config.yml
 !**/src/main/**/target/
 !**/src/test/**/target/
 
