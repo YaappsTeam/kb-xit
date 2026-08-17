@@ -66,8 +66,29 @@
        shutdown hook calls it for every account, not just the
        Telegram poller, 0.32.1 GIT_WORKFLOW.md (story #54): portable
        description of this session's branch/commit/PR/issue-tracking
-       workflow, for reuse in other repositories. -->
-  <version>0.32.1-SNAPSHOT</version>
+       workflow, for reuse in other repositories, 0.33.0 config.yml
+       loader (story #22): AppConfig/MilestoneLadderConfig/
+       MilestoneConfig plus ConfigLoader, parsing an optional YAML
+       file's milestoneLadders section into MilestoneLadder objects;
+       not yet wired into anything that uses it, 0.34.0 MilestoneSets
+       sourced from config.yml (story #22): configure() replaces the
+       registry when Main finds a milestoneLadders section, and is a
+       no-op otherwise, so with no config file behavior is unchanged
+       from the previous hardcoded EQUITY/OPTIONS-only registry,
+       0.35.0 the scattered process-wide env vars (TRADING_MODE,
+       MARKET_DATA, WATCH_BROKER_FILLS, PLACE_REAL_ORDERS,
+       EOD_EXIT_TIME, EOD_TIMEZONE, INSTRUMENT_REFRESH_TIME,
+       TRADE_STATE_DIR, ORDER_PRODUCT) now resolve config.yml first,
+       env var second, hardcoded default third (story #22), via one
+       resolveSetting/resolveBooleanSetting helper reused for all of
+       them instead of copy-pasted per setting, 0.35.1 config.yml.example,
+       gitignore, and an end-to-end no-config-file test (story #22),
+       0.35.2 planning docs updated for config.yml (story #22):
+       IMPLEMENTATION_PLAN.md step 4.1 marked DONE, PRODUCT_REQUIREMENTS.md's
+       Phase 4 line, DEVELOPMENT.md's stale "no configuration file"
+       gap note corrected rather than left standing, README.md gains
+       a Configuration section. -->
+  <version>0.35.2-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>xit-mc</name>
@@ -138,6 +159,13 @@
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
+      <version>2.21.1</version>
+    </dependency>
+
+    <!-- jackson-dataformat-yaml: parses config.yml (story #22). -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.dataformat</groupId>
+      <artifactId>jackson-dataformat-yaml</artifactId>
       <version>2.21.1</version>
     </dependency>
 

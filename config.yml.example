@@ -1,0 +1,74 @@
+# Optional process-wide configuration (story #22). Copy this file to
+# config.yml (gitignored) to use it -- xit-mc runs exactly as it always has
+# if config.yml doesn't exist at all, or exists but omits a given key: each
+# setting falls back to its env var, then to its hardcoded default. See
+# GIT_WORKFLOW.md for how this repo documents design decisions, and
+# PRODUCT_REQUIREMENTS.md / IMPLEMENTATION_PLAN.md step 4.1 for the full
+# reasoning behind this file's existence.
+#
+# CONFIG_FILE overrides where this file is looked for (default: config.yml
+# in the working directory). TELEGRAM_BOT_TOKEN and ACCOUNTS_FILE are not
+# configurable here -- see story #22's design note for why.
+
+# Milestone ladders: replaces the built-in EQUITY/OPTIONS registry entirely
+# when this section is present. Uncomment and edit to change the numbers,
+# add a new named set, or leave this whole section out to keep the
+# defaults shown below (which is what ships if you never touch this file).
+#
+# milestoneLadders:
+#   EQUITY:
+#     hardStopPercent: 0.20
+#     rungs:
+#       - percent: 1.0
+#       - percent: 2.0
+#         phaseTransition: PHASE_2
+#       - percent: 3.0
+#       - percent: 5.0
+#         phaseTransition: PHASE_3
+#         ownershipLockPercent: 0.30
+#       - percent: 8.0
+#         ownershipLockPercent: 0.50
+#       - percent: 13.0
+#         ownershipLockPercent: 0.65
+#       - percent: 21.0
+#         ownershipLockPercent: 0.75
+#       - percent: 34.0
+#         ownershipLockPercent: 0.85
+#       - percent: 55.0
+#         ownershipLockPercent: 0.90
+#   OPTIONS:
+#     hardStopPercent: 0.40
+#     rungs:
+#       - percent: 1.0
+#       - percent: 3.0
+#       - percent: 5.0
+#       - percent: 8.0
+#         phaseTransition: PHASE_2
+#       - percent: 13.0
+#       - percent: 21.0
+#         phaseTransition: PHASE_3
+#         ownershipLockPercent: 0.30
+#       - percent: 34.0
+#         ownershipLockPercent: 0.50
+#       - percent: 55.0
+#         ownershipLockPercent: 0.65
+#       - percent: 89.0
+#         ownershipLockPercent: 0.75
+#       - percent: 144.0
+#         ownershipLockPercent: 0.85
+#       - percent: 233.0
+#         ownershipLockPercent: 0.90
+
+# Process-wide settings -- each mirrors the env var of the same intent
+# (named in the comment) and uses that env var's own default when both
+# this file and the env var are absent.
+
+# tradingMode: "paper"                # TRADING_MODE -- only "paper" is wired up so far
+# marketData: "simulated"             # MARKET_DATA -- "simulated" or "live"
+# watchBrokerFills: false             # WATCH_BROKER_FILLS
+# placeRealOrders: false              # PLACE_REAL_ORDERS
+# eodExitTime: "15:15"                # EOD_EXIT_TIME -- unset (the default) means no forced end-of-day close
+# eodTimezone: "Asia/Kolkata"         # EOD_TIMEZONE
+# instrumentRefreshTime: "08:45"      # INSTRUMENT_REFRESH_TIME
+# tradeStateDir: "/var/lib/xit-mc"    # TRADE_STATE_DIR -- defaults to ~/.xit-mc/open-trades
+# orderProduct: "I"                   # ORDER_PRODUCT -- Upstox product code for real orders

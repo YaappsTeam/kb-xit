@@ -354,7 +354,7 @@ Per-account fields are never environment variables in the single-account sense (
 
 - ⏸ **Blocked, deferred:** deploy to a host with a registered static IP; verify OAuth, both WebSockets, and order placement against real Upstox servers — no static IP or VM registered yet (August 2026). Revisit once that infrastructure exists; nothing else in this phase depends on it
 - ⏸ **Blocked, deferred:** one supervised real order, single lot, before trusting `PLACE_REAL_ORDERS` unattended — same static-IP dependency
-- External configuration (YAML) for all thresholds, if env-var-per-account outgrows itself — not blocked, can proceed independently
+- External configuration (YAML) for all thresholds — done (story #22): optional `config.yml`, opt-in, milestone ladders and the scattered process-wide env vars all overridable there
 - Historical data feed — done (story #24): `com.kbquants.marketdata.pricepath` fetches and converts real historical NIFTY-option candles into the same price-path shape the simulation engine already consumes, scoped to today's tracked instrument window
 - Structured logging, health checks, graceful shutdown — done (story #23): JSON logs with accountId/orderId in MDC, `/health` command, `TradeMonitor#shutdown` on every account at process exit
 

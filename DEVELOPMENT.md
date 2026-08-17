@@ -198,7 +198,7 @@ Unchanged from the previous milestone.
 
 ## 9. Known gaps / explicitly unfinished areas
 
-- **No configuration file.** Settings come from environment variables (`MARKET_DATA`, `CAPITAL_PER_TRADE`, `MAX_RISK_PER_TRADE`, `EOD_EXIT_TIME`, …) and, for the milestone sets, from code. An empty `com.kbquants.config` package scaffolding a YAML/JSON loader was deleted: it advertised configurability that did not exist, and nothing referenced it.
+- ~~No configuration file~~ — **no longer a gap (story #22).** An optional `config.yml` (`com.kbquants.config`: `AppConfig`, `ConfigLoader`) can now override the process-wide env vars (`MARKET_DATA`, `EOD_EXIT_TIME`, …) and the milestone ladders themselves. Absent, behavior is unchanged — see `README.md`'s Configuration section.
 - **Parallel execution isn't reachable from `SimulationRunner`** — same as before.
 - **`CandleGenerator`** — still an empty stub.
 - **`PHASE_4` (forced EOD exit)** — implemented via `EndOfDaySchedule`, opt-in through `EOD_EXIT_TIME`. Closes `MANAGED` trades at a wall-clock time in the market's zone; `OBSERVED` trades are warned about rather than sold, `RELEASED` ignored.
